@@ -35,6 +35,7 @@ Bu rapor, proje kurallarinda belirlenen teslim sablonuna tam olarak uygun sekild
 ---
 
 ### Cikti/gorsel nerede:
+- Ortak Drive Klasoru: https://drive.google.com/drive/folders/1nwjYPcgwE-nXCPeCYR1B6o8ucXRCKT6O?usp=drive_link
 - Referans Bolme Tablosu: `data/splits/veri_bolme.csv`
 - On Isleme Modulu: `src/preprocessing.py` (fonksiyon: `on_isle`)
 - Sinif Dagilim Grafigi: `reports/figures/sinif_dagilimi.png`
