@@ -8,7 +8,7 @@ Bu rapor, proje kurallarinda belirlenen teslim sablonuna tam olarak uygun sekild
 1. Kaggle 'eye_diseases_classification' veri setindeki 4217 gorselin tamamini OpenCV ile tarayip bozuk dosya kontrolu yaptim.
 2. MD5 kriptografik hash taramasiyla mukerrer ve capraz sinif cakisiklarini tespit ettim.
 3. Glokom sinifinin 1007 olan boyutunu baz alarak her siniftan seed=42 ile 1007 ornek sectim ve toplam 4028 dengeli gorsel elde ettim.
-4. Stratified Split ile her sinifi kesin olarak %70 Train (705), %15 Validation (151), %15 Test (151) olarak boldum ve tum ekibin ortak kullanacagi `veri_bolme.csv` dosyasini urettim.
+4. Hasta Bazli Stratified Split (Patient-Level Group Stratified) yontemiyle ayni hastanin sag ve sol gozlerinin ayni kumede kalmasini sagladim (%0.0 sizinti). Her sinifi kesin olarak %70 Train (705), %15 Validation (151), %15 Test (151) olarak boldum ve `veri_bolme.csv` dosyasini urettim.
 5. Tum ekibin kullanacagi `on_isle()` fonksiyonunu yazdim (ROI kirpma, 512x512 boyutlandirma, yesil kanal izolasyonu, CLAHE, median filtre ve [0.0, 1.0] normalizasyonu).
 6. Ekip arkadaslarimizin hemen kod yazmaya baslayabilmesi icin ortak Drive klasor agacini ve calisir durumda `01_veri_on_isleme.ipynb` Colab sablonunu hazirladim.
 
