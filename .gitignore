@@ -39,6 +39,7 @@ data/processed/
 *.h5
 *.onnx
 *.pkl
+data/splits/raw_metadata_cache.csv
 
 # Personal / Local Planning (GitHub'a gitmeyecek yerel dosyalar)
 TODO.md
