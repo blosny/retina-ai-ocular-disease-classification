@@ -264,7 +264,7 @@ def ana_akisi_calistir():
     cozunurluk_dagilimi_ciz(df_bolunmus, grafik_cozunurluk)
     print(f"[BILGI] Grafik kaydedildi: {grafik_cozunurluk.name}")
 
-    print("\n[TAMAMLANDI] Pipeline basariyla calisti. Ekran goruntusu alinabilir.")
+    print("\n[TAMAMLANDI] Veri bolme pipeline'i basariyla tamamlandi.")
 
 
 if __name__ == "__main__":
