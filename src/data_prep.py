@@ -1,232 +1,151 @@
 """
-RETINA-AI: Veri Dogrulama, Temizleme, Esitleme ve Bolme Modulu
------------------------------------------------------------------------
-Gorevli: Kisi 1 (Veri ve On Isleme Sorumlusu)
-Ders: Firat Universitesi Bilgisayar Muhendisligi - Medikal Goruntu Isleme
-
-Aciklama:
-Bu modul, ham retina goruntulerini tarayarak su islemleri gerceklestirir:
-1. Gorsellerin OpenCV ile okunabilirlik kontrolu (Bozuk dosya tespiti).
-2. MD5 ozetleme (hashing) ile mukerrer ve capraz-sinif cakisimlarinin tespiti:
-   - Kaggle veri setinde 2 gorsel (1415_right.jpg ve 625_left.jpg) hem 'cataract'
-     hem de 'glaucoma' klasorunde bulunmaktadir (etiket karismasi / capraz kopya).
-   - Glokom sinifi tam 1007 gorsele sahip oldugu icin bu 2 cakisik gorsel 
-     ornek sayisi yuksek olan 'cataract' sinifindan elenerek veri sizintisi (leakage)
-     tamamen onlenir.
-3. Her sinifin 1007 ornege dengelenmesi (Toplam: 4028 gorsel).
-4. Stratified Split yontemiyle %70 Train (705), %15 Validation (151), %15 Test (151) bolunmesi.
-5. Tum ekibin ortak referans alacagi 'veri_bolme.csv' dosyasinin uretilmesi.
-6. Sinif dagilimini gosteren rapor grafiginin olusturulmasi.
+Veri Dogrulama, Temizleme, Esitleme ve Bolme Pipeline'i
+------------------------------------------------------
+Bu dosya ham retina veri setini tarar; bozuk dosyalari ve siniflar arasi 
+kopya gorselleri ayiklar. Her sinifi 1007 gorsele esitleyerek %70 egitim,
+%15 dogrulama ve %15 test kumelerine (stratified) boler.
+Cikti olarak 'veri_bolme.csv' ve analiz grafiklerini uretir.
 """
 
-import os
 import hashlib
 from pathlib import Path
-from typing import Dict, List, Tuple
 import cv2
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import train_test_split
 
 
 def dosya_md5_hesapla(dosya_yolu: Path, blok_boyutu: int = 65536) -> str:
     """
-    Bir dosyanin MD5 hash ozetini hesaplar.
-    
-    Parametreler:
-        dosya_yolu (Path): Hash degeri hesaplanacak dosyanin yolu.
-        blok_boyutu (int): Okunacak tampon bayt boyutu.
-        
-    Dondurur:
-        str: 32 karakterlik MD5 onaltilik dizgi.
+    Dosyanin bayt iceriginden 32 karakterlik benzersiz MD5 ozeti uretir.
+    Gorsel isimleri farkli olsa bile ayni fotograflari tespit etmek icin kullanilir.
     """
     hasher = hashlib.md5()
     with open(dosya_yolu, "rb") as dosya:
-        tampon = dosya.read(blok_boyutu)
-        while len(tampon) > 0:
+        while tampon := dosya.read(blok_boyutu):
             hasher.update(tampon)
-            tampon = dosya.read(blok_boyutu)
     return hasher.hexdigest()
 
 
-def veri_setini_tara_ve_dogrula(veri_dizini: Path, onbellek_dosyasi: Path = None) -> pd.DataFrame:
+def veri_setini_tara_ve_dogrula(veri_dizini: Path, onbellek_yolu: Path = None) -> pd.DataFrame:
     """
-    Ham veri seti dizinini tarar, bozuk dosyalari ayiklar, MD5 hashlerini
-    ve gorsel boyutlarini cikarip bir DataFrame olarak dondurur.
-    Onbellek dosyasi varsa hizli yukleme yapar.
-    
-    Parametreler:
-        veri_dizini (Path): Ana veri seti dizini.
-        onbellek_dosyasi (Path): Taranan sonuclarin saklandigi ara CSV.
-        
-    Dondurur:
-        pd.DataFrame: Dogrulanmis gorsellere ait metadata tablosu.
+    archive/dataset altindaki tum goruntuleri OpenCV ile tek tek acar.
+    Okunamayan (bozuk) dosyalari raporlar; gecerli olanlarin boyut ve MD5 bilgilerini cikarir.
+    Hiz icin metadata onbellek dosyasindan (raw_metadata_cache.csv) okunabilir.
     """
-    if onbellek_dosyasi and onbellek_dosyasi.exists():
-        print(f"[BILGI] Onbellekteki metadata yukleniyor: {onbellek_dosyasi}")
-        return pd.read_csv(onbellek_dosyasi)
+    if onbellek_yolu and onbellek_yolu.exists():
+        print(f"[BILGI] Metadata onbellekten yuklendi: {onbellek_yolu.name}")
+        return pd.read_csv(onbellek_yolu)
 
-    print(f"[BILGI] Veri dizini taraniyor: {veri_dizini}")
+    print(f"[BILGI] Veri dizini taranip dogrulaniyor: {veri_dizini}")
     gecerli_uzantilar = {".jpg", ".jpeg", ".png", ".bmp"}
-    kayitlar: List[Dict] = []
-    bozuk_dosya_sayisi = 0
-    
-    sinif_klasorleri = [d for d in veri_dizini.iterdir() if d.is_dir()]
-    
-    for sinif_dir in sinif_klasorleri:
+    kayitlar = []
+    bozuk_sayisi = 0
+
+    for sinif_dir in [d for d in veri_dizini.iterdir() if d.is_dir()]:
         sinif_adi = sinif_dir.name
         dosyalar = [f for f in sinif_dir.iterdir() if f.suffix.lower() in gecerli_uzantilar]
-        print(f"  -> Sinif '{sinif_adi}': {len(dosyalar)} dosya bulundu.")
-        
+
         for dosya in dosyalar:
             img = cv2.imread(str(dosya))
             if img is None:
-                print(f"[UYARI] Bozuk dosya tespit edildi: {dosya.name}")
-                bozuk_dosya_sayisi += 1
+                print(f"[UYARI] Bozuk dosya: {dosya.name}")
+                bozuk_sayisi += 1
                 continue
-                
-            yukseklik, genislik, kanal = img.shape
-            md5_hash = dosya_md5_hesapla(dosya)
-            
+
+            h, w, c = img.shape
             kayitlar.append({
                 "image_name": dosya.name,
                 "file_path": str(dosya.resolve()),
                 "relative_path": f"{sinif_adi}/{dosya.name}",
                 "class_name": sinif_adi,
-                "width": genislik,
-                "height": yukseklik,
-                "channels": kanal,
-                "md5_hash": md5_hash
+                "width": w,
+                "height": h,
+                "channels": c,
+                "md5_hash": dosya_md5_hesapla(dosya)
             })
-            
+
     df = pd.DataFrame(kayitlar)
-    print(f"[TAMAMLANDI] Toplam {len(df)} gecerli gorsel dogrulandi. (Bozuk dosya: {bozuk_dosya_sayisi})")
-    
-    if onbellek_dosyasi:
-        onbellek_dosyasi.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(onbellek_dosyasi, index=False)
-        
+    print(f"[TAMAMLANDI] {len(df)} gorsel dogrulandi (Bozuk dosya: {bozuk_sayisi}).")
+
+    if onbellek_yolu:
+        onbellek_yolu.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(onbellek_yolu, index=False)
+
     return df
 
 
 def capraz_ve_mukerrer_temizle(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Veri setinde ayni hash degerine sahip cakisik veya mukerrer gorselleri cozer.
-    Sinif ici kopya yoktur. Siniflar arasi (cataract vs glaucoma) 2 cakisik gorsel 
-    sayisi bol olan cataract sinifindan cikarilarak her iki sinifin da 
-    baskinligi ve temizligi korunur.
-    
-    Parametreler:
-        df (pd.DataFrame): Dogrulanmis metadata tablosu.
-        
-    Dondurur:
-        pd.DataFrame: Cakisiklardan arindirilmis tablo.
+    Kaggle veri setindeki siniflar arasi capraz kopya (label contamination) sorununu cozer.
+    Ayni hash'e sahip '625_left.jpg' ve '1415_right.jpg' gorselleri hem katarakt hem glokomda yer alir.
+    Glokomun ornek sayisi kritik (1007) oldugundan, bu cakisiklar fazla ornegi olan katarakttan elenir.
     """
-    ciftler = df[df.duplicated(subset=["md5_hash"], keep=False)]
-    if len(ciftler) > 0:
-        print("[BILGI] Siniflar arasi capraz kopya analizi yapiliyor:")
-        for hash_val, grup in ciftler.groupby("md5_hash"):
-            siniflar = grup["class_name"].tolist()
-            adlar = grup["image_name"].tolist()
-            print(f"  -> Cakisik Gorsel: {adlar} - Siniflar: {siniflar}")
-            
-        # Cataract sinifindaki cakisik ornekleri filtrele (Cataract'ta 1038 ornek oldugu icin rahat elenir)
-        cikisik_cataract_indeksler = df[(df["class_name"] == "cataract") & (df["md5_hash"].isin(ciftler["md5_hash"]))].index
-        df_temiz = df.drop(index=cikisik_cataract_indeksler).copy()
-        print(f"[BILGI] {len(cikisik_cataract_indeksler)} cakisik ornek cataract sinifindan elendi.")
+    cakisiklar = df[df.duplicated(subset=["md5_hash"], keep=False)]
+    if len(cakisiklar) > 0:
+        cikisik_cataract = df[(df["class_name"] == "cataract") & (df["md5_hash"].isin(cakisiklar["md5_hash"]))].index
+        df_temiz = df.drop(index=cikisik_cataract).copy()
+        print(f"[BILGI] {len(cikisik_cataract)} capraz cakisik ornek katarakttan elendi (Veri sizintisi onlendi).")
     else:
         df_temiz = df.copy()
-        
+
     return df_temiz
 
 
 def siniflari_esitle(df: pd.DataFrame, hedef_sayi: int = 1007, seed: int = 42) -> pd.DataFrame:
     """
-    Her siniftan tam olarak belirlenen sayi kadar ornek rastgele secer.
-    
-    Parametreler:
-        df (pd.DataFrame): Temizlenmis gorsel tablosu.
-        hedef_sayi (int): Her siniftan secilecek gorsel sayisi (varsayilan: 1007).
-        seed (int): Rastgele secim icin tekrarlanabilir tohum degeri.
-        
-    Dondurur:
-        pd.DataFrame: Her siniftan tam 1007 ornek iceren dengeli tablo.
+    Her siniftan seed=42 ile rastgele tam 1007 ornek secerek veri setini dengeler.
+    Boylece model egitiminde cok sayida ornegi olan siniflara kayma (bias) onlenir.
     """
-    dengeli_parcalar = []
-    
+    parcalar = []
     for sinif_adi, grup in df.groupby("class_name"):
-        mevcut_sayi = len(grup)
-        if mevcut_sayi < hedef_sayi:
-            raise ValueError(
-                f"Sinif '{sinif_adi}' icin mevcut sayi ({mevcut_sayi}) hedef sayidan ({hedef_sayi}) kucuk!"
-            )
-            
+        if len(grup) < hedef_sayi:
+            raise ValueError(f"'{sinif_adi}' sinifi ({len(grup)}) hedef sayidan ({hedef_sayi}) yetersiz!")
         secilenler = grup.sample(n=hedef_sayi, random_state=seed)
-        dengeli_parcalar.append(secilenler)
-        print(f"  -> Sinif '{sinif_adi}': {mevcut_sayi} ornek arasindan {hedef_sayi} ornek secildi.")
-        
-    dengeli_df = pd.concat(dengeli_parcalar, ignore_index=True)
-    return dengeli_df
+        parcalar.append(secilenler)
+
+    return pd.concat(parcalar, ignore_index=True)
 
 
 def stratified_veri_bolme(
-    df: pd.DataFrame, 
-    train_sayi_sinif_basina: int = 705, 
-    val_sayi_sinif_basina: int = 151, 
-    test_sayi_sinif_basina: int = 151, 
+    df: pd.DataFrame,
+    train_sayi: int = 705,
+    val_sayi: int = 151,
+    test_sayi: int = 151,
     seed: int = 42
 ) -> pd.DataFrame:
     """
-    Veriyi her siniftan tam olarak 705 Train (%70), 151 Val (%15), 151 Test (%15)
-    olacak sekilde kesin oranda boler (705 + 151 + 151 = 1007).
-    
-    Parametreler:
-        df (pd.DataFrame): Her siniftan 1007 ornek iceren dengeli tablo.
-        train_sayi_sinif_basina (int): Egitim ornek sayisi (705).
-        val_sayi_sinif_basina (int): Dogrulama ornek sayisi (151).
-        test_sayi_sinif_basina (int): Test ornek sayisi (151).
-        seed (int): Rastgele karistirma tohum degeri.
-        
-    Dondurur:
-        pd.DataFrame: 'split' sutunu atanmis nihai veri tablosu.
+    Her sinifi orantisal olarak 705 Egitim (%70), 151 Dogrulama (%15), 151 Test (%15) olarak ayirir.
+    Sinif dengesi her uc kumedede birebir korunur (705 + 151 + 151 = 1007).
     """
-    bolunmus_parcalar = []
-    
-    for sinif_adi, grup in df.groupby("class_name"):
-        # Karistir
+    bolunmus_listeler = []
+    for _, grup in df.groupby("class_name"):
         karisik = grup.sample(frac=1.0, random_state=seed).reset_index(drop=True)
-        
-        train_parca = karisik.iloc[:train_sayi_sinif_basina].copy()
-        train_parca["split"] = "train"
-        
-        val_parca = karisik.iloc[train_sayi_sinif_basina : train_sayi_sinif_basina + val_sayi_sinif_basina].copy()
-        val_parca["split"] = "val"
-        
-        test_parca = karisik.iloc[train_sayi_sinif_basina + val_sayi_sinif_basina : train_sayi_sinif_basina + val_sayi_sinif_basina + test_sayi_sinif_basina].copy()
-        test_parca["split"] = "test"
-        
-        bolunmus_parcalar.extend([train_parca, val_parca, test_parca])
-        
-    sonuc_df = pd.concat(bolunmus_parcalar, ignore_index=True)
-    sonuc_df = sonuc_df.sort_values(by=["class_name", "split", "image_name"]).reset_index(drop=True)
-    return sonuc_df
+
+        train_part = karisik.iloc[:train_sayi].copy()
+        train_part["split"] = "train"
+
+        val_part = karisik.iloc[train_sayi : train_sayi + val_sayi].copy()
+        val_part["split"] = "val"
+
+        test_part = karisik.iloc[train_sayi + val_sayi : train_sayi + val_sayi + test_sayi].copy()
+        test_part["split"] = "test"
+
+        bolunmus_listeler.extend([train_part, val_part, test_part])
+
+    sonuc = pd.concat(bolunmus_listeler, ignore_index=True)
+    return sonuc.sort_values(by=["class_name", "split", "image_name"]).reset_index(drop=True)
 
 
-def dagilim_grafigi_olustur(df: pd.DataFrame, cikti_yolu: Path):
+def dagilim_grafigi_ciz(df: pd.DataFrame, cikti_yolu: Path):
     """
-    Sinif ve bolum (train/val/test) dagilimini gosteren yayin kalitesinde bar grafigi cizer.
-    
-    Parametreler:
-        df (pd.DataFrame): 'split' sutununu iceren veri tablosu.
-        cikti_yolu (Path): Grafigin kaydedilecegi PNG dosyasi yolu.
+    Sinif ve kume (train/val/test) ornek sayilarini gosteren bar grafigi uretir.
     """
     cikti_yolu.parent.mkdir(parents=True, exist_ok=True)
-    
     plt.figure(figsize=(10, 6))
-    renkler = {"train": "#1f77b4", "val": "#ff7f0e", "test": "#2ca02c"}
-    
+    renkler = {"train": "#2b5c8f", "val": "#d97724", "test": "#388e3c"}
+
     ax = sns.countplot(
         data=df,
         x="class_name",
@@ -234,83 +153,118 @@ def dagilim_grafigi_olustur(df: pd.DataFrame, cikti_yolu: Path):
         palette=renkler,
         order=sorted(df["class_name"].unique())
     )
-    
-    plt.title("RETINA-AI: Veri Seti Sinif ve Bolum Dagilimi (Stratified %70/15/15)", fontsize=13, pad=15)
-    plt.xlabel("Hastalik Sinifi", fontsize=11)
-    plt.ylabel("Gorsel Sayisi", fontsize=11)
+
+    plt.title("RETINA-AI: Veri Seti Sinif ve Kume Dagilimi (%70 Train, %15 Val, %15 Test)", fontsize=12, pad=12)
+    plt.xlabel("Hastalik Sinifi", fontsize=10)
+    plt.ylabel("Gorsel Sayisi", fontsize=10)
     plt.legend(title="Veri Bolumu", frameon=True)
-    plt.grid(axis="y", linestyle="--", alpha=0.5)
-    
+    plt.grid(axis="y", linestyle="--", alpha=0.4)
+
     for p in ax.patches:
         deger = int(p.get_height())
         if deger > 0:
             ax.annotate(
                 f"{deger}",
-                (p.get_x() + p.get_width() / 2., p.get_height()),
+                (p.get_x() + p.get_width() / 2.0, p.get_height()),
                 ha="center", va="center",
-                xytext=(0, 6),
+                xytext=(0, 5),
                 textcoords="offset points",
                 fontsize=9
             )
-            
+
     plt.tight_layout()
     plt.savefig(cikti_yolu, dpi=300)
     plt.close()
-    print(f"[BILGI] Sinif dagilim grafigi kaydedildi: {cikti_yolu}")
+
+
+def cozunurluk_dagilimi_ciz(df: pd.DataFrame, cikti_yolu: Path):
+    """
+    Ham retina gorsellerinin genislik ve yukseklik (cozunurluk) dagilimini
+    sinif bazinda gosteren akademik sacilim grafigi cizer.
+    """
+    cikti_yolu.parent.mkdir(parents=True, exist_ok=True)
+    plt.figure(figsize=(9, 6))
+
+    sns.scatterplot(
+        data=df,
+        x="width",
+        y="height",
+        hue="class_name",
+        alpha=0.6,
+        s=30,
+        palette="tab10"
+    )
+
+    plt.title("RETINA-AI: Ham Gorsellerin Cozunurluk (Genislik x Yukseklik) Dagilimi", fontsize=12, pad=12)
+    plt.xlabel("Genislik (Piksel)", fontsize=10)
+    plt.ylabel("Yukseklik (Piksel)", fontsize=10)
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.legend(title="Sinif", frameon=True)
+    plt.tight_layout()
+    plt.savefig(cikti_yolu, dpi=300)
+    plt.close()
 
 
 def ana_akisi_calistir():
     """
-    Veri hazirlama ve bolme surecinin tum adimlarini yoneten ana fonksiyon.
+    Tum pipeline adimlarini calistirir ve konsola formatli terminal ciktisi verir.
     """
     proje_koku = Path(__file__).resolve().parent.parent
-    ham_veri_dizini = proje_koku / "archive" / "dataset"
-    cikti_dizini = proje_koku / "data" / "splits"
-    rapor_dizini = proje_koku / "reports" / "figures"
-    onbellek_yolu = proje_koku / "data" / "splits" / "raw_metadata_cache.csv"
-    
-    cikti_dizini.mkdir(parents=True, exist_ok=True)
-    rapor_dizini.mkdir(parents=True, exist_ok=True)
-    
-    csv_cikti_yolu = cikti_dizini / "veri_bolme.csv"
-    grafik_cikti_yolu = rapor_dizini / "sinif_dagilimi.png"
-    
-    print("=" * 70)
-    print("RETINA-AI: KISI 1 VERI VE ON ISLEME - ASAMA 1 (VERI BOLME)")
-    print("=" * 70)
-    
-    # 1. Dosyalari tara ve dogrula
-    df_ham = veri_setini_tara_ve_dogrula(ham_veri_dizini, onbellek_dosyasi=onbellek_yolu)
-    
-    # 2. Capraz kopya (cross-class duplicate) temizle
+    ham_dizin = proje_koku / "archive" / "dataset"
+    splits_dizini = proje_koku / "data" / "splits"
+    fig_dizini = proje_koku / "reports" / "figures"
+    onbellek = splits_dizini / "raw_metadata_cache.csv"
+
+    splits_dizini.mkdir(parents=True, exist_ok=True)
+    fig_dizini.mkdir(parents=True, exist_ok=True)
+
+    csv_cikti = splits_dizini / "veri_bolme.csv"
+    grafik_dagilim = fig_dizini / "sinif_dagilimi.png"
+    grafik_cozunurluk = fig_dizini / "cozunurluk_dagilimi.png"
+
+    print("+" + "-" * 68 + "+")
+    print("|      RETINA-AI: VERI VE ON ISLEME SORUMLUSU - VERI BOLME HATTI      |")
+    print("+" + "-" * 68 + "+")
+
+    # 1. Dogrulama
+    df_ham = veri_setini_tara_ve_dogrula(ham_dizin, onbellek_yolu=onbellek)
+
+    # 2. Capraz cakisiklari temizleme
     df_temiz = capraz_ve_mukerrer_temizle(df_ham)
-    
-    # 3. Siniflari esitle (Her biri 1007 adet)
+
+    # 3. 1007'ye esitleme
     df_dengeli = siniflari_esitle(df_temiz, hedef_sayi=1007, seed=42)
-    
-    # 4. Kesin Stratified Bolme: 705 Train, 151 Val, 151 Test
+
+    # 4. Stratified bolme
     df_bolunmus = stratified_veri_bolme(
-        df_dengeli, 
-        train_sayi_sinif_basina=705, 
-        val_sayi_sinif_basina=151, 
-        test_sayi_sinif_basina=151, 
+        df_dengeli,
+        train_sayi=705,
+        val_sayi=151,
+        test_sayi=151,
         seed=42
     )
-    
-    # 5. CSV olarak kaydet
-    df_bolunmus.to_csv(csv_cikti_yolu, index=False, encoding="utf-8")
-    print(f"\n[BASARILI] 'veri_bolme.csv' basariyla kaydedildi: {csv_cikti_yolu}")
-    print(f"Toplam secilen gorsel sayisi: {len(df_bolunmus)}")
-    
-    # 6. Dagilim ozeti yazdir
-    ozet_tablo = pd.crosstab(df_bolunmus["class_name"], df_bolunmus["split"], margins=True)
-    print("\n--- SINIF VE BOLUM DAGILIM TABLOSU ---")
-    print(ozet_tablo)
-    print("--------------------------------------\n")
-    
-    # 7. Grafik ciz
-    dagilim_grafigi_olustur(df_bolunmus, grafik_cikti_yolu)
-    print("[TAMAMLANDI] Asama 1 basariyla tamamlandi!")
+
+    # 5. CSV kaydet
+    df_bolunmus.to_csv(csv_cikti, index=False, encoding="utf-8")
+    print(f"\n[BASARILI] 'veri_bolme.csv' olusturuldu -> {csv_cikti.name}")
+    print(f"Toplam secilen gorsel sayisi: {len(df_bolunmus)} (Sinif basina 1007)")
+
+    # 6. Konsol ozet tablosu
+    ozet = pd.crosstab(df_bolunmus["class_name"], df_bolunmus["split"], margins=True)
+    print("\n" + "=" * 50)
+    print("           VERI SETI BOLUM DAGILIM TABLOSU")
+    print("=" * 50)
+    print(ozet)
+    print("=" * 50 + "\n")
+
+    # 7. Grafikler
+    dagilim_grafigi_ciz(df_bolunmus, grafik_dagilim)
+    print(f"[BILGI] Grafik kaydedildi: {grafik_dagilim.name}")
+
+    cozunurluk_dagilimi_ciz(df_bolunmus, grafik_cozunurluk)
+    print(f"[BILGI] Grafik kaydedildi: {grafik_cozunurluk.name}")
+
+    print("\n[TAMAMLANDI] Pipeline basariyla calisti. Ekran goruntusu alinabilir.")
 
 
 if __name__ == "__main__":
