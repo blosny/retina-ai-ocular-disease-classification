@@ -4,9 +4,13 @@ RETINA-AI - Streamlit arayuzu (Kisi 5: Degerlendirme ve Streamlit)
 Calistirma (proje ana klasorunden):
     streamlit run src/app.py
 
-Gercek kod: on_isle (Kisi 1, src/preprocessing.py)
-Gecici dubluler: damar_haritasi (Kisi 2), tahmin_et (Kisi 3 + 4), gradcam (Kisi 4)
-Arkadaslarin kodu geldikce dublorleri onlarin fonksiyonlariyla degistir.
+Gercek kod:
+    on_isle            -> Kisi 1 (src/preprocessing.py)
+    CNN tahmin+Grad-CAM -> Kisi 4 (src/cnn_models.py)
+                          Model dosyasi: models/model_efficientnet.pth (Drive'dan indirilir)
+Gecici dublorler:
+    damar_haritasi     -> Kisi 2 (src/anatomy.py gelince degisecek)
+    svm_tahmin         -> Kisi 3 (src/lesions.py + SVM gelince degisecek)
 """
 
 import cv2
@@ -14,8 +18,8 @@ import numpy as np
 import streamlit as st
 from PIL import Image
 
-# KISI 1 - Gercek on isleme kodu (src/preprocessing.py)
-from preprocessing import on_isle, boyutlandir
+# KISI 1 - Gercek on isleme kodu
+from preprocessing import boyutlandir, on_isle, roi_kirp
 
 SINIFLAR = {
     "normal": "🟢 Normal",
@@ -26,12 +30,31 @@ SINIFLAR = {
 
 
 # ============================================================
+# KISI 4 - CNN (gercek)
+# ============================================================
+
+@st.cache_resource(show_spinner="Model yükleniyor...")
+def cnn_modelini_yukle():
+    """Modeli bir kez yukler. Dosya yoksa None + hata mesaji dondurur."""
+    try:
+        from cnn_models import VARSAYILAN_MODEL_YOLU, model_yukle
+    except ImportError as hata:
+        return None, f"PyTorch kurulu değil ({hata}). Kurulum: py -m pip install torch torchvision"
+    if not VARSAYILAN_MODEL_YOLU.exists():
+        return None, (
+            f"Model dosyası bulunamadı: {VARSAYILAN_MODEL_YOLU}\n\n"
+            "Drive'daki model_efficientnet.pth dosyasını proje klasöründeki "
+            "models klasörüne koyun."
+        )
+    return model_yukle(VARSAYILAN_MODEL_YOLU), None
+
+
+# ============================================================
 # GECICI DUBLORLER - sahipleri bitirince degistir
 # ============================================================
 
 def damar_haritasi(islenmis: np.ndarray) -> np.ndarray:
-    """KISI 2 (src/anatomy.py) - Damar segmentasyonu.
-    Girdi: on_isle ciktisi (512x512, 0-1 arasi gri). Cikti: siyah-beyaz maske."""
+    """KISI 2 (src/anatomy.py) - GECICI. Girdi: on_isle ciktisi. Cikti: siyah-beyaz maske."""
     gri = (islenmis * 255).astype(np.uint8)
     cekirdek = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
     siyah_sapka = cv2.morphologyEx(gri, cv2.MORPH_BLACKHAT, cekirdek)
@@ -40,22 +63,11 @@ def damar_haritasi(islenmis: np.ndarray) -> np.ndarray:
     return cv2.bitwise_and(maske, goz_alani)
 
 
-def tahmin_et(islenmis: np.ndarray, model_turu: str) -> dict:
-    """KISI 3 (SVM) ve KISI 4 (CNN) - Sinif olasiliklari, toplami 1.
-    SU AN SAHTE: ayni goruntu icin hep ayni, rastgele sayilar."""
+def svm_tahmin(islenmis: np.ndarray) -> dict:
+    """KISI 3 (SVM) - GECICI: ayni goruntu icin hep ayni, rastgele sayilar."""
     tohum = int((islenmis * 1000).astype(np.int64).sum() % (2**32))
-    if model_turu.startswith("SVM"):
-        tohum += 1
     olasiliklar = np.random.default_rng(tohum).dirichlet(np.ones(len(SINIFLAR)) * 0.6)
     return {sinif: float(p) for sinif, p in zip(SINIFLAR, olasiliklar)}
-
-
-def gradcam(islenmis: np.ndarray) -> np.ndarray:
-    """KISI 4 (src/cnn_models.py) - Grad-CAM, 0-1 arasi, 512x512.
-    SU AN SAHTE: tek bir sicak nokta."""
-    h, w = islenmis.shape[:2]
-    y, x = np.mgrid[0:h, 0:w]
-    return np.exp(-(((x - w * 0.6) ** 2 + (y - h * 0.5) ** 2) / (2 * (w * 0.12) ** 2)))
 
 
 # ============================================================
@@ -84,27 +96,44 @@ def main():
         st.info("Sınıflar: Normal, Diyabetik Retinopati, Glokom, Katarakt")
         st.warning("⚠️ Bu sistem teşhis koymaz. Yalnızca eğitim amaçlıdır.")
 
+    cnn_secili = model_turu.startswith("CNN")
+    model, model_hatasi = cnn_modelini_yukle() if cnn_secili else (None, None)
+    if model_hatasi:
+        st.error(model_hatasi)
+        return
+
     dosya = st.file_uploader("Retina (fundus) görüntüsünü yükleyin", type=["jpg", "jpeg", "png"])
     if dosya is None:
         st.info("Başlamak için bir fundus görüntüsü yükleyin.")
         return
 
     ham = np.array(Image.open(dosya).convert("RGB"))
-    bgr = cv2.cvtColor(ham, cv2.COLOR_RGB2BGR)  # Kisi 1'in kodu BGR bekliyor
+    bgr = cv2.cvtColor(ham, cv2.COLOR_RGB2BGR)  # Kisi 1 ve Kisi 4'un kodu BGR bekliyor
 
     with st.spinner("İşleniyor..."):
-        islenmis, adimlar = on_isle(bgr, ara_adimlari_ver=True)
-        renkli = cv2.cvtColor(boyutlandir(adimlar["2_roi_kirpilmis"]), cv2.COLOR_BGR2RGB)
+        islenmis = on_isle(bgr)
+        renkli = cv2.cvtColor(boyutlandir(roi_kirp(bgr)), cv2.COLOR_BGR2RGB)
         damarlar = damar_haritasi(islenmis)
-        olasiliklar = tahmin_et(islenmis, model_turu)
-        isi = isi_haritasi_bindir(renkli, gradcam(islenmis))
+
+        if cnn_secili:
+            from cnn_models import gradcam, tahmin
+            # CNN on_isle ciktisini degil, ham BGR goruntuyu alir (renk bilgisi icin)
+            olasiliklar = tahmin(bgr, model)
+            isi = isi_haritasi_bindir(renkli, gradcam(bgr, model=model))
+            isi_aciklama = "Grad-CAM: modelin baktığı yer"
+        else:
+            olasiliklar = svm_tahmin(islenmis)
+            isi = None
 
     st.subheader("1. Görüntünün yolculuğu")
     k1, k2, k3, k4 = st.columns(4)
     k1.image(renkli, caption="Kırpılmış retina")
     k2.image(islenmis, caption="Ön işlenmiş (yeşil kanal + CLAHE)", clamp=True)
-    k3.image(damarlar, caption="Damar haritası")
-    k4.image(isi, caption="Grad-CAM: modelin baktığı yer")
+    k3.image(damarlar, caption="Damar haritası (geçici)")
+    if isi is not None:
+        k4.image(isi, caption=isi_aciklama)
+    else:
+        k4.info("Grad-CAM yalnızca CNN modelinde gösterilir.")
 
     st.subheader("2. Sonuç")
     en_iyi = max(olasiliklar, key=olasiliklar.get)
@@ -118,8 +147,12 @@ def main():
             st.write(f"{SINIFLAR[sinif]} · %{p * 100:.1f}")
             st.progress(p)
 
-    st.warning("⚠️ Bu sonuç yalnızca akademik simülasyon amaçlıdır. Tıbbi teşhis yerine geçmez.")
-    st.caption("Not: Tahminler, damar haritası ve Grad-CAM şu an örnek (geçici) verilerdir.")
+    st.warning(
+        "⚠️ Bu sonuç yalnızca akademik simülasyon amaçlıdır. Tıbbi teşhis yerine geçmez. "
+        "Karanlık, bulanık veya kötü çekilmiş fotoğraflar katarakt olarak sınıflandırılabilir."
+    )
+    if not cnn_secili:
+        st.caption("Not: SVM tahminleri şu an örnek (geçici) verilerdir. Kişi 3'ün modeli gelince gerçek olacak.")
 
 
 if __name__ == "__main__":
