@@ -6,10 +6,10 @@ Calistirma (proje ana klasorunden):
 
 Gercek kod:
     on_isle            -> Kisi 1 (src/preprocessing.py)
+    damar + optik disk -> Kisi 2 (src/anatomy.py)
     CNN tahmin+Grad-CAM -> Kisi 4 (src/cnn_models.py)
                           Model dosyasi: models/model_efficientnet.pth (Drive'dan indirilir)
 Gecici dublorler:
-    damar_haritasi     -> Kisi 2 (src/anatomy.py gelince degisecek)
     svm_tahmin         -> Kisi 3 (src/lesions.py + SVM gelince degisecek)
 """
 
@@ -20,6 +20,9 @@ from PIL import Image
 
 # KISI 1 - Gercek on isleme kodu
 from preprocessing import boyutlandir, on_isle, roi_kirp
+
+# KISI 2 - Gercek damar ve optik disk kodu
+from anatomy import damar_haritasi, damar_yogunlugu, disk_isaretle, optik_disk
 
 SINIFLAR = {
     "normal": "🟢 Normal",
@@ -52,16 +55,6 @@ def cnn_modelini_yukle():
 # ============================================================
 # GECICI DUBLORLER - sahipleri bitirince degistir
 # ============================================================
-
-def damar_haritasi(islenmis: np.ndarray) -> np.ndarray:
-    """KISI 2 (src/anatomy.py) - GECICI. Girdi: on_isle ciktisi. Cikti: siyah-beyaz maske."""
-    gri = (islenmis * 255).astype(np.uint8)
-    cekirdek = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-    siyah_sapka = cv2.morphologyEx(gri, cv2.MORPH_BLACKHAT, cekirdek)
-    _, maske = cv2.threshold(siyah_sapka, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    goz_alani = cv2.erode((gri > 10).astype(np.uint8) * 255, np.ones((5, 5), np.uint8), iterations=3)
-    return cv2.bitwise_and(maske, goz_alani)
-
 
 def svm_tahmin(islenmis: np.ndarray) -> dict:
     """KISI 3 (SVM) - GECICI: ayni goruntu icin hep ayni, rastgele sayilar."""
@@ -113,7 +106,12 @@ def main():
     with st.spinner("İşleniyor..."):
         islenmis = on_isle(bgr)
         renkli = cv2.cvtColor(boyutlandir(roi_kirp(bgr)), cv2.COLOR_BGR2RGB)
+
+        # KISI 2: damar haritasi, damar yogunlugu ve optik disk
         damarlar = damar_haritasi(islenmis)
+        yogunluk = damar_yogunlugu(damarlar, islenmis)
+        disk = optik_disk(renkli)  # renkli 512x512 RGB alir, bulamazsa None doner
+        disk_gorsel = disk_isaretle(renkli, disk)
 
         if cnn_secili:
             from cnn_models import gradcam, tahmin
@@ -126,14 +124,21 @@ def main():
             isi = None
 
     st.subheader("1. Görüntünün yolculuğu")
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     k1.image(renkli, caption="Kırpılmış retina")
     k2.image(islenmis, caption="Ön işlenmiş (yeşil kanal + CLAHE)", clamp=True)
-    k3.image(damarlar, caption="Damar haritası (geçici)")
+    k3.image(damarlar, caption=f"Damar haritası (yoğunluk: {yogunluk:.3f})")
     if isi is not None:
         k4.image(isi, caption=isi_aciklama)
     else:
         k4.info("Grad-CAM yalnızca CNN modelinde gösterilir.")
+    if disk is None:
+        k5.warning("Optik disk güvenilir şekilde bulunamadı (bulanık, karanlık veya disk görüntü dışında olabilir).")
+    else:
+        k5.image(
+            disk_gorsel,
+            caption=f"Optik disk (çukur/disk oranı ≈ {disk['cukur_disk_orani']}, yaklaşık değer)",
+        )
 
     st.subheader("2. Sonuç")
     en_iyi = max(olasiliklar, key=olasiliklar.get)
