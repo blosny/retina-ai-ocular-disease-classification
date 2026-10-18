@@ -1,16 +1,16 @@
 """
 RETINA-AI - Klasik Model ve Oznitelik Cikarimi (Kisi 3: Oznitelik Muhendisligi ve SVM)
 --------------------------------------------------------------------------------------
-Bu modul, goz dibi (fundus) goruntulerinden klasik makine ogrenmesi (SVM) icin
-tibbi ve morfolojik oznitelikler cikarir ve egitilmis SVM modeli uzerinden sinif olasiliklarini tahmin eder.
+Bu modul, goz dibi (fundus) goruntulerinden klasik makine ogrenmesi (SVM / Random Forest) icin
+tibbi ve morfolojik oznitelikler cikarir ve egitilmis model uzerinden sinif olasiliklarini tahmin eder.
 
 Fonksiyonlar:
-    1. oznitelik_cikar(goruntu): 512x512 RGB numpy dizisinden kalite ve lezyon oznitelikleri cikarir.
-    2. k3_tahmin_et(goruntu, model_path): Oznitelikleri SVM modeline vererek 4 sinifli olasilik sozluk formatinda tahmin dondurur.
+    1. oznitelik_cikar(goruntu, bgr_mi): 512x512 RGB numpy dizisinden kalite, damar ve lezyon oznitelikleri cikarir.
+    2. k3_tahmin_et(goruntu, model_path, bgr_mi): Oznitelikleri SVM modeline vererek 4 sinifli olasilik sozluk formatinda tahmin dondurur.
 """
 
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, Union, Optional
 import os
 import cv2
 import numpy as np
@@ -19,14 +19,18 @@ import numpy as np
 SINIFLAR = ["normal", "diabetic_retinopathy", "glaucoma", "cataract"]
 
 
-def oznitelik_cikar(goruntu: np.ndarray) -> Dict[str, Union[float, int]]:
+def oznitelik_cikar(
+    goruntu: Union[np.ndarray, str, Path],
+    bgr_mi: bool = False
+) -> Dict[str, Union[float, int]]:
     """
     512x512 RGB formatindaki retina fundus goruntusunden medikal oznitelikler cikarir.
     
     Cikarilan Oznitelikler:
         - Netlik/Kalite:
             * laplacian_varyansi: Laplacian varyansi (katarakt gibi bulanik durumlarda belirgin duser)
-            * ortalama_kontrast: Retina dokusunun ortalama kontrast / standart sapma degeri
+            * ortalama_kontrast: Retina dokusunun RMS kontrast / standart sapma degeri
+            * damar_orani: Yesil kanalda morfolojik olarak filtrelenen damar alaninin toplam retina alanina orani
         - Diyabetik Retinopati Lezyonlari:
             * sari_lezyon_alani: HSV renk uzayinda sari lezyon / sert eksuda (hard exudates) toplam piksel alani
             * sari_lezyon_sayisi: Tespit edilen sari eksuda / lezyon odaklarinin sayisi
@@ -34,13 +38,15 @@ def oznitelik_cikar(goruntu: np.ndarray) -> Dict[str, Union[float, int]]:
             * kanama_sayisi: Tespit edilen kanama odaklarinin sayisi
 
     Parametreler:
-        goruntu (np.ndarray): 512x512 RGB formatinda numpy matrisi (uint8 veya [0, 1] float).
+        goruntu (np.ndarray | str | Path): 512x512 goruntu matrisi veya dosya yolu.
+        bgr_mi (bool): Goruntu OpenCV'nin varsayilan BGR formatinda geliyorsa True verilir (otomatik RGB'ye cevrilir).
         
     Dondurur:
-        dict: Asagidaki oznitelik sozluk formatinda degerler:
+        dict: Tum degerlerin standart Python float/int turunde oldugu sozluk:
             {
                 "laplacian_varyansi": float,
                 "ortalama_kontrast": float,
+                "damar_orani": float,
                 "sari_lezyon_alani": float,
                 "sari_lezyon_sayisi": int,
                 "kanama_alani": float,
@@ -50,8 +56,23 @@ def oznitelik_cikar(goruntu: np.ndarray) -> Dict[str, Union[float, int]]:
     if goruntu is None:
         raise ValueError("Girdi goruntusu None olamaz.")
 
-    # 1. Boyut ve Renk Kanali Dogrulama
-    gorsel = goruntu.copy()
+    # 1. Dosya Yolu veya Matris Okuma / BGR -> RGB Donusumu
+    if isinstance(goruntu, (str, Path)):
+        dosya_yolu = Path(goruntu)
+        if not dosya_yolu.exists():
+            raise FileNotFoundError(f"Gorsel bulunamadi: {dosya_yolu}")
+        bgr = cv2.imread(str(dosya_yolu))
+        if bgr is None:
+            raise ValueError(f"Gorsel okunamadi: {dosya_yolu}")
+        gorsel = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    elif isinstance(goruntu, np.ndarray):
+        gorsel = goruntu.copy()
+        if bgr_mi and gorsel.ndim == 3 and gorsel.shape[2] >= 3:
+            gorsel = cv2.cvtColor(gorsel, cv2.COLOR_BGR2RGB)
+    else:
+        raise TypeError("Girdi np.ndarray, str veya Path olmalidir.")
+
+    # 2. Boyut ve Renk Kanali Dogrulama
     if gorsel.ndim == 2:
         gorsel = cv2.cvtColor(gorsel, cv2.COLOR_GRAY2RGB)
     elif gorsel.shape[2] == 4:
@@ -92,7 +113,29 @@ def oznitelik_cikar(goruntu: np.ndarray) -> Dict[str, Union[float, int]]:
     ortalama_kontrast = float(np.std(retina_pikselleri)) if len(retina_pikselleri) > 0 else float(np.std(gri))
 
     # ============================================================
-    # 2. DIYABETIK RETINOPATI: HSV UZAYINDA SARI LEZYON / EKSUDA
+    # 2. GORUNUR DAMAR ORANI (Yesil kanalda damar yogunlugu)
+    # ============================================================
+    # Yesil kanalda hemoglobin emilimi nedeniyle damarlar en belirgin kontrasta sahiptir.
+    g_kanal = gorsel_uint8[:, :, 1]
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    g_clahe = clahe.apply(g_kanal)
+
+    kernel_damar = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    damar_blackhat = cv2.morphologyEx(g_clahe, cv2.MORPH_BLACKHAT, kernel_damar)
+    _, damar_maske = cv2.threshold(damar_blackhat, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Sadece retina kuresi icini maskele
+    damar_retina = cv2.bitwise_and(damar_maske, damar_maske, mask=fundus_ic_maske)
+    
+    # Retina alani ve damar piksel sayisi
+    retina_piksel_alani = float(np.count_nonzero(fundus_maske))
+    damar_piksel_alani = float(np.count_nonzero(damar_retina))
+    
+    # ZeroDivisionError onlemek icin paydaya kucuk tolerans skaler (1e-6) ekle
+    damar_orani = float(damar_piksel_alani / (retina_piksel_alani + 1e-6))
+
+    # ============================================================
+    # 3. DIYABETIK RETINOPATI: HSV UZAYINDA SARI LEZYON / EKSUDA
     # ============================================================
     # Eksudalar yuksek yagli lipid birikintileridir; parlak saridir.
     hsv = cv2.cvtColor(gorsel_uint8, cv2.COLOR_RGB2HSV)
@@ -121,11 +164,8 @@ def oznitelik_cikar(goruntu: np.ndarray) -> Dict[str, Union[float, int]]:
             sari_lezyon_alani += float(alan)
 
     # ============================================================
-    # 3. DIYABETIK RETINOPATI: YESIL KANALDA KOYU KIRMIZI KANAMA
+    # 4. DIYABETIK RETINOPATI: YESIL KANALDA KOYU KIRMIZI KANAMA
     # ============================================================
-    # Yesil kanalda hemoglobin isigi guclu absorbe ettiginden kanamalar ve mikroanevrizmalar koyu cukurlar olusturur.
-    g_kanal = gorsel_uint8[:, :, 1]
-
     # Zemin dokusundan lokal olarak koyu kalan morfolojik cukurlari yakalamak icin Black-hat
     kernel_bh = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
     blackhat_g = cv2.morphologyEx(g_kanal, cv2.MORPH_BLACKHAT, kernel_bh)
@@ -142,7 +182,7 @@ def oznitelik_cikar(goruntu: np.ndarray) -> Dict[str, Union[float, int]]:
     for c in konturlar_kanama:
         alan = cv2.contourArea(c)
         if 4 <= alan <= 3500:
-            # Damarlari elemek icin en/boy orani ve dairesellik kontrolu
+            # Damarlari elemek icin en/boy orani kontrolu
             x, y, w, h = cv2.boundingRect(c)
             en_boy = max(w, h) / (min(w, h) + 1e-4)
             if en_boy < 4.0:  # Uzun dallanan damarlari ayikla, yuvarlak/noktasal kanamalari al
@@ -150,11 +190,12 @@ def oznitelik_cikar(goruntu: np.ndarray) -> Dict[str, Union[float, int]]:
                 kanama_alani += float(alan)
 
     # ============================================================
-    # OZNITELIK SOZLUGU
+    # OZNITELIK SOZLUGU (JSON Uyumlu Standart Python Tipleri)
     # ============================================================
     oznitelikler = {
         "laplacian_varyansi": float(round(laplacian_varyansi, 4)),
         "ortalama_kontrast": float(round(ortalama_kontrast, 4)),
+        "damar_orani": float(round(damar_orani, 4)),
         "sari_lezyon_alani": float(round(sari_lezyon_alani, 2)),
         "sari_lezyon_sayisi": int(sari_lezyon_sayisi),
         "kanama_alani": float(round(kanama_alani, 2)),
@@ -166,24 +207,28 @@ def oznitelik_cikar(goruntu: np.ndarray) -> Dict[str, Union[float, int]]:
 
 def _sezgisel_olasilik_hesapla(oznitelikler: Dict[str, Union[float, int]]) -> Dict[str, float]:
     """
-    Egitilmis SVM modeli henuz diskte bulunmadiginda, tibbi kurallara dayali
+    Egitilmis model henuz diskte bulunmadiginda, tibbi kurallara dayali
     gercekci bir olasilik dagilimi uretir.
     """
     lap = float(oznitelikler.get("laplacian_varyansi", 100.0))
     kontrast = float(oznitelikler.get("ortalama_kontrast", 35.0))
+    damar = float(oznitelikler.get("damar_orani", 0.05))
     sari_alan = float(oznitelikler.get("sari_lezyon_alani", 0.0))
     kanama_alan = float(oznitelikler.get("kanama_alani", 0.0))
 
-    # Katarakt skoru: Dusuk netlik (<60) ve dusuk kontrast
-    skor_katarakt = max(0.05, (100.0 - min(lap, 100.0)) / 20.0 + (35.0 - min(kontrast, 35.0)) / 12.0)
+    # Katarakt skoru: Dusuk netlik (<60), dusuk kontrast ve damarlarin secilememesi
+    skor_katarakt = max(
+        0.05,
+        (100.0 - min(lap, 100.0)) / 20.0 + (35.0 - min(kontrast, 35.0)) / 12.0 + (0.04 - min(damar, 0.04)) * 25.0
+    )
     
     # Diyabetik Retinopati skoru: Eksuda ve kanama alanlari
     skor_dr = max(0.05, (sari_alan / 60.0) + (kanama_alan / 50.0))
     
-    # Glokom skoru: Genel net fundus, optik sinir capi
+    # Glokom skoru: Genel net fundus, optik sinir cupping
     skor_glokom = 1.0 if lap > 50.0 else 0.2
     
-    # Normal skoru: Yuksek netlik, lezyonsuz yapi
+    # Normal skoru: Yuksek netlik, lezyonsuz yapi ve belirgin damar agi
     if sari_alan < 15 and kanama_alan < 15 and lap > 80:
         skor_normal = 3.5
     else:
@@ -210,31 +255,44 @@ def _sezgisel_olasilik_hesapla(oznitelikler: Dict[str, Union[float, int]]) -> Di
 
 
 def k3_tahmin_et(
-    goruntu: np.ndarray,
-    model_path: str = "models/svm_model.pkl"
+    goruntu: Union[np.ndarray, str, Path],
+    model_path: str = "models/svm_model.pkl",
+    bgr_mi: bool = False
 ) -> Dict[str, float]:
     """
     Fundus goruntusunden oznitelikleri cikarir ve SVM modelini kullanarak
     4 sinifli hastalik olasiliklarini dondurur.
 
     Parametreler:
-        goruntu (np.ndarray): 512x512 RGB formatinda numpy dizisi.
+        goruntu (np.ndarray | str | Path): 512x512 RGB/BGR goruntu matrisi veya dosya yolu.
         model_path (str): Egitilmis SVM model dosyasinin (.pkl) konumu.
+        bgr_mi (bool): Girdi goruntusu BGR formatindaysa True verilir.
 
     Dondurur:
         dict: Tam olarak su formatta olasiliklar:
             {"normal": 0.10, "diabetic_retinopathy": 0.70, "glaucoma": 0.15, "cataract": 0.05}
     """
-    oznitelikler = oznitelik_cikar(goruntu)
+    oznitelikler = oznitelik_cikar(goruntu, bgr_mi=bgr_mi)
     
-    vektor = np.array([[
+    # 7 oznitelikli tam vektor
+    vektor_7 = [
+        oznitelikler["laplacian_varyansi"],
+        oznitelikler["ortalama_kontrast"],
+        oznitelikler["damar_orani"],
+        oznitelikler["sari_lezyon_alani"],
+        oznitelikler["sari_lezyon_sayisi"],
+        oznitelikler["kanama_alani"],
+        oznitelikler["kanama_sayisi"]
+    ]
+    # Geriye donuk 6 oznitelikli model uyumlulugu
+    vektor_6 = [
         oznitelikler["laplacian_varyansi"],
         oznitelikler["ortalama_kontrast"],
         oznitelikler["sari_lezyon_alani"],
         oznitelikler["sari_lezyon_sayisi"],
         oznitelikler["kanama_alani"],
         oznitelikler["kanama_sayisi"]
-    ]], dtype=np.float32)
+    ]
 
     model_dosyasi = Path(model_path)
 
@@ -243,6 +301,12 @@ def k3_tahmin_et(
             import joblib
             model = joblib.load(model_dosyasi)
             
+            beklenen_oznitelik_sayisi = getattr(model, "n_features_in_", None)
+            if beklenen_oznitelik_sayisi == 6:
+                vektor = np.array([vektor_6], dtype=np.float32)
+            else:
+                vektor = np.array([vektor_7], dtype=np.float32)
+
             if hasattr(model, "predict_proba"):
                 probalar = model.predict_proba(vektor)[0]
                 sinif_isimleri = getattr(model, "classes_", SINIFLAR)
@@ -271,16 +335,25 @@ def k3_tahmin_et(
 
 
 if __name__ == "__main__":
+    import json
+
     print("=== RETINA-AI: K3 Oznitelik Modulu Testi ===")
     test_img = np.zeros((512, 512, 3), dtype=np.uint8)
     cv2.circle(test_img, (256, 256), 220, (190, 95, 35), -1)
+    for i in range(15):
+        cv2.line(test_img, (256, 256), (100 + i*20, 60 + i*25), (100, 30, 20), 2)
     cv2.circle(test_img, (280, 200), 8, (245, 225, 60), -1)   # Sari eksuda
     cv2.circle(test_img, (200, 300), 7, (90, 25, 15), -1)     # Koyu kanama
 
     oznitelik_sonuc = oznitelik_cikar(test_img)
     print("Cikarilan Oznitelikler:")
     for k, v in oznitelik_sonuc.items():
-        print(f"  {k}: {v}")
+        print(f"  {k}: {v} (tip: {type(v).__name__})")
+
+    # JSON Serilestirme Testi
+    json_cikti = json.dumps(oznitelik_sonuc)
+    print("\nJSON Serilestirme Basarili:")
+    print(json_cikti)
 
     tahmin_sonuc = k3_tahmin_et(test_img)
     print("\nTahmin Edilen Olasiliklar:")
