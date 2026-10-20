@@ -1,0 +1,13 @@
+# RETINA-AI arayuz temasi (proje ana klasorunden "streamlit run src/app.py" ile calistirinca okunur)
+[theme]
+base = "light"
+primaryColor = "#0B6E79"
+backgroundColor = "#EEF2F4"
+secondaryBackgroundColor = "#F7FAFB"
+textColor = "#16263D"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
