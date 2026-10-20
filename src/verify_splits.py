@@ -7,29 +7,41 @@ Bu script, 'data/splits/veri_bolme.csv' dosyasini denetler:
 3. Sinif basina ornek sayilarinin dengesini dogrular.
 """
 
+import sys
 from pathlib import Path
 import pandas as pd
 
-def veri_bolmeyi_dogrula():
+def veri_bolmeyi_dogrula(csv_adi="veri_bolme_v2.csv"):
     proje_koku = Path(__file__).resolve().parent.parent
-    csv_yolu = proje_koku / "data" / "splits" / "veri_bolme.csv"
+    csv_yolu = proje_koku / "data" / "splits" / csv_adi
 
     if not csv_yolu.exists():
         print(f"[HATA] Dosya bulunamadi: {csv_yolu}")
         return
 
     df = pd.read_csv(csv_yolu)
+    hasta_sutunu = "hasta_anahtari" if "hasta_anahtari" in df.columns else "patient_id"
 
-    print("+" + "-" * 68 + "+")
-    print("|      RETINA-AI: VERI BOLME VE SIZINTI (LEAKAGE) DOGRULAMA RAPORU     |")
-    print("+" + "-" * 68 + "+")
-    print(f"Toplam Gorsel Sayisi : {len(df)}")
-    print(f"Toplam Hasta Sayisi  : {df['patient_id'].nunique()}")
+    print("+" + "-" * 72 + "+")
+    print(f"|  RETINA-AI: VERI BOLME VE SIZINTI (LEAKAGE) RAPORU - {csv_adi:<17} |")
+    print("+" + "-" * 72 + "+")
+    print(f"Toplam Gorsel Sayisi   : {len(df)}")
+    print(f"Toplam Hasta Sayisi    : {df[hasta_sutunu].nunique()}")
+    print(f"Kullanilan Hasta Kolonu: {hasta_sutunu}")
+
+    # Cozunurluk analizi
+    cozunurlukler = df[["width", "height"]].value_counts().to_dict()
+    print(f"Cozunurluk Dagilimi    : {cozunurlukler}")
+
+    # MD5 Tekrar Kontrolu
+    if "md5_hash" in df.columns:
+        md5_tekrar = int(df["md5_hash"].duplicated().sum())
+        print(f"MD5 Tekrar (Kopya)     : {md5_tekrar}")
 
     # 1. Hasta Kümeleri
-    train_hastalar = set(df[df["split"] == "train"]["patient_id"])
-    val_hastalar = set(df[df["split"] == "val"]["patient_id"])
-    test_hastalar = set(df[df["split"] == "test"]["patient_id"])
+    train_hastalar = set(df[df["split"] == "train"][hasta_sutunu])
+    val_hastalar = set(df[df["split"] == "val"][hasta_sutunu])
+    test_hastalar = set(df[df["split"] == "test"][hasta_sutunu])
 
     train_test_kesisim = train_hastalar.intersection(test_hastalar)
     train_val_kesisim = train_hastalar.intersection(val_hastalar)
@@ -55,7 +67,9 @@ def veri_bolmeyi_dogrula():
     print(f"Train Kumesi Hasta Sayisi : {len(train_hastalar)}")
     print(f"Val   Kumesi Hasta Sayisi : {len(val_hastalar)}")
     print(f"Test  Kumesi Hasta Sayisi : {len(test_hastalar)}")
-    print("=" * 70)
+    print("=" * 74)
 
 if __name__ == "__main__":
-    veri_bolmeyi_dogrula()
+    hedef = sys.argv[1] if len(sys.argv) > 1 else "veri_bolme_v2.csv"
+    veri_bolmeyi_dogrula(hedef)
+
