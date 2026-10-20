@@ -12,7 +12,15 @@ Gercek kod:
                           Eski v1 modeli (model_efficientnet.pth) sizinti icerdigi icin kullanilmaz.
 Gecici dublorler:
     svm_tahmin         -> Kisi 3 (gercek goruntulerle ve v2 bolmesiyle egitilmis SVM gelince degisecek)
+
+Gorunum:
+    Tasarim (renkler, yazi tipi, masaustu/telefon yerlesimi) asagidaki STIL blogunda.
+    Sonuc karti ve goruntu adimlari HTML olarak cizilir; boylece masaustunde yan yana,
+    telefonda alt alta / ikili izgara olarak dizilir.
 """
+
+import base64
+import html
 
 import cv2
 import numpy as np
@@ -29,11 +37,216 @@ from anatomy import damar_haritasi, damar_yogunlugu, disk_isaretle, optik_disk
 KARARSIZLIK_ESIGI = 0.60
 
 SINIFLAR = {
-    "normal": "🟢 Normal",
-    "diabetic_retinopathy": "🟡 Diyabetik Retinopati",
-    "glaucoma": "🔵 Glokom",
-    "cataract": "⚪ Katarakt",
+    "normal": "Normal",
+    "diabetic_retinopathy": "Diyabetik retinopati",
+    "glaucoma": "Glokom",
+    "cataract": "Katarakt",
 }
+# Her sinifin arayuzdeki rengi (cubuk ve etiket noktasi)
+SINIF_RENK = {
+    "normal": "#2E8B57",
+    "diabetic_retinopathy": "#C98A0B",
+    "glaucoma": "#2F6FB5",
+    "cataract": "#7A6C93",
+}
+SINIF_ACIKLAMA = {
+    "normal": "Belirgin bir hastalık bulgusu görülmedi.",
+    "diabetic_retinopathy": "Şeker hastalığının retina damarlarında bıraktığı lekeler ve kanamalar.",
+    "glaucoma": "Optik sinir başındaki çukurun büyümesiyle ilişkili sinir hasarı.",
+    "cataract": "Göz merceğindeki bulanıklık; fotoğraf puslu ve detaysız görünür.",
+}
+MODEL_SECENEKLERI = ["CNN (derin öğrenme)", "SVM (klasik)"]
+
+
+# ============================================================
+# STIL
+# ============================================================
+
+STIL = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+
+:root {
+  --zemin: #EEF2F4;
+  --kart: #FFFFFF;
+  --murekkep: #16263D;
+  --ikincil: #4E5D70;
+  --soluk: #6F7D8C;
+  --cizgi: #DCE3E8;
+  --ana: #0B6E79;
+  --ana-koyu: #08555E;
+  --ana-acik: #E3F1F2;
+  --uyari: #8A5200;
+  --uyari-zemin: #FFF4E0;
+}
+
+html, body, .stApp, button, input, label,
+[data-testid="stMarkdownContainer"] *, [data-testid="stSidebar"] *, .ra-kart *, .ra-ust * {
+  font-family: 'Manrope', system-ui, sans-serif !important;
+}
+[data-testid="stIconMaterial"], .material-symbols-rounded { font-family: 'Material Symbols Rounded' !important; }
+.stApp { background: var(--zemin); color: var(--murekkep); }
+[data-testid="stHeader"] { background: transparent; }
+.block-container { max-width: 1180px; padding-top: 2.4rem; padding-bottom: 3rem; }
+
+/* ---------- Ust bolum ---------- */
+.ra-ust { display: flex; align-items: center; gap: 26px; margin-bottom: 24px; }
+.ra-retina { flex: 0 0 auto; width: 92px; height: 92px; }
+.ra-baslik { font-size: 2.6rem !important; font-weight: 800 !important; letter-spacing: -0.02em; line-height: 1.05 !important;
+  margin: 0 !important; padding: 0 !important; color: var(--murekkep) !important; }
+.ra-alt { font-size: 1.12rem; color: var(--ikincil); margin: 8px 0 0; max-width: 62ch; line-height: 1.55; }
+
+/* ---------- Kartlar ---------- */
+.ra-kart { background: var(--kart); border: 1px solid var(--cizgi); border-radius: 18px; padding: 26px 28px; margin-bottom: 22px; }
+.ra-kart h2 { font-size: 1.35rem !important; font-weight: 700 !important; margin: 0 0 4px !important; padding: 0 !important; color: var(--murekkep) !important; }
+.ra-not { color: var(--soluk); font-size: 0.98rem; margin: 0 0 18px; }
+
+/* Yukleme bolumunun Streamlit kutusu */
+[data-testid="stVerticalBlockBorderWrapper"] { background: var(--kart); border-color: var(--cizgi) !important; border-radius: 18px !important; }
+[data-testid="stVerticalBlockBorderWrapper"] > div { padding: 10px 12px; }
+.ra-yukle-baslik { font-size: 1.35rem; font-weight: 700; color: var(--murekkep); margin: 0; }
+.ra-yukle-not { color: var(--soluk); font-size: 0.98rem; margin: 2px 0 6px; }
+
+/* ---------- Model secimi ---------- */
+div[data-testid="stButtonGroup"] button {
+  padding: 10px 20px !important; min-height: 46px; border-radius: 12px !important; border-color: var(--cizgi) !important;
+  background: #fff !important; color: var(--murekkep) !important;
+}
+div[data-testid="stButtonGroup"] button p { font-size: 1.02rem !important; font-weight: 600; color: inherit !important; }
+div[data-testid="stButtonGroup"] button[aria-checked="true"] {
+  background: var(--ana) !important; color: #fff !important; border-color: var(--ana) !important;
+}
+div[data-testid="stButtonGroup"] button:focus-visible { outline: 3px solid #7CC3CB; outline-offset: 2px; }
+
+/* ---------- Yukleme alani ---------- */
+[data-testid="stFileUploaderDropzone"] {
+  min-height: 180px; border: 2px dashed #9FB7C0 !important; border-radius: 16px !important;
+  background: #F7FAFB !important; padding: 28px 32px !important; align-items: center; gap: 24px;
+}
+[data-testid="stFileUploaderDropzone"]:hover { border-color: var(--ana) !important; background: var(--ana-acik) !important; }
+/* Streamlit'in Ingilizce yazilarini Turkce ile degistir */
+[data-testid="stFileUploaderDropzoneInstructions"] { display: flex; flex-direction: column; gap: 4px; }
+[data-testid="stFileUploaderDropzoneInstructions"] * { font-size: 0 !important; line-height: 0 !important; }
+[data-testid="stFileUploaderDropzoneInstructions"] svg { display: none; }
+[data-testid="stFileUploaderDropzoneInstructions"]::before {
+  content: "Fotoğrafı buraya sürükleyin"; font-size: 1.15rem; font-weight: 700; color: var(--murekkep); line-height: 1.4;
+}
+[data-testid="stFileUploaderDropzoneInstructions"]::after {
+  content: "JPG veya PNG, en fazla 200 MB"; font-size: 0.95rem; color: var(--soluk); line-height: 1.4;
+}
+[data-testid="stFileUploaderDropzone"] > span > button[data-testid="stBaseButton-secondary"],
+[data-testid="stFileUploaderDropzone"] > button[data-testid="stBaseButton-secondary"] {
+  background: var(--ana) !important; border: none !important; border-radius: 12px !important;
+  padding: 12px 28px !important; min-height: 52px; font-size: 0 !important; color: #fff !important;
+}
+[data-testid="stFileUploaderDropzone"] > span > button[data-testid="stBaseButton-secondary"] *,
+[data-testid="stFileUploaderDropzone"] > button[data-testid="stBaseButton-secondary"] * { display: none !important; }
+[data-testid="stFileUploaderDropzone"] > span > button[data-testid="stBaseButton-secondary"]::after,
+[data-testid="stFileUploaderDropzone"] > button[data-testid="stBaseButton-secondary"]::after {
+  content: "Fotoğraf seç"; font-size: 1.05rem; font-weight: 700; color: #fff;
+}
+[data-testid="stFileUploaderDropzone"] button[data-testid="stBaseButton-secondary"]:hover { background: var(--ana-koyu) !important; }
+[data-testid="stFileUploaderDropzone"] button:focus-visible { outline: 3px solid #7CC3CB; outline-offset: 2px; }
+[data-testid="stFileChip"] { font-size: 1rem; }
+
+/* ---------- Sonuc karti ---------- */
+.ra-sonuc { display: grid; grid-template-columns: 300px 1fr; gap: 32px; align-items: start; }
+.ra-sonuc figure { margin: 0; }
+.ra-sonuc img { width: 100%; border-radius: 50%; aspect-ratio: 1; object-fit: cover; background: #000; display: block; }
+.ra-sonuc figcaption { text-align: center; color: var(--soluk); font-size: 0.88rem; margin-top: 8px; }
+.ra-etiket { font-size: 0.98rem; color: var(--soluk); margin: 0; }
+.ra-tani { display: flex; align-items: center; gap: 12px; margin: 2px 0 6px; }
+.ra-tani .ra-nokta { width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto; }
+.ra-tani .ra-ad { font-size: 2.2rem; font-weight: 800; letter-spacing: -0.01em; line-height: 1.1; color: var(--murekkep); }
+.ra-guven { font-size: 1.05rem; color: var(--ikincil); margin: 0 0 4px; }
+.ra-guven b { color: var(--murekkep); font-size: 1.3rem; }
+.ra-aciklama { color: var(--ikincil); margin: 0 0 18px; font-size: 1rem; line-height: 1.5; }
+.ra-satir { display: grid; grid-template-columns: 190px 1fr 64px; align-items: center; gap: 14px; margin: 11px 0; font-size: 1rem; }
+.ra-isim { display: flex; align-items: center; gap: 9px; color: var(--murekkep); }
+.ra-isim i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+.ra-cubuk { height: 12px; background: #E8EDF0; border-radius: 6px; overflow: hidden; }
+.ra-cubuk div { height: 100%; border-radius: 6px; }
+.ra-yuzde { text-align: right; font-variant-numeric: tabular-nums; color: var(--ikincil); font-weight: 600; }
+.ra-secili .ra-isim, .ra-secili .ra-yuzde { font-weight: 800; color: var(--murekkep); }
+.ra-meta { margin: 16px 0 0; color: var(--soluk); font-size: 0.9rem; }
+
+.ra-kutu { border-radius: 14px; padding: 14px 18px; margin: 16px 0 0; font-size: 0.98rem; line-height: 1.5; }
+.ra-kutu.uyari { background: var(--uyari-zemin); color: var(--uyari); border: 1px solid #F1D29A; }
+.ra-kutu.bilgi { background: var(--ana-acik); color: var(--ana-koyu); border: 1px solid #BFDDE0; margin-bottom: 22px; }
+
+/* ---------- Isleme adimlari (gercek bir sira oldugu icin numarali) ---------- */
+.ra-adimlar { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
+.ra-adim figure { margin: 0; }
+.ra-resim { position: relative; border-radius: 14px; overflow: hidden; background: #000; aspect-ratio: 1; }
+.ra-resim img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ra-bos { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; text-align: center;
+  padding: 16px; color: #C9D2DA; font-size: 0.88rem; line-height: 1.45; background: #1D2733; }
+.ra-no { position: absolute; top: 8px; left: 8px; width: 26px; height: 26px; border-radius: 50%; background: rgba(255,255,255,0.92);
+  color: var(--murekkep); font-weight: 800; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; }
+.ra-adim figcaption { margin-top: 10px; }
+.ra-adim figcaption b { display: block; font-size: 1rem; color: var(--murekkep); }
+.ra-adim figcaption span { display: block; font-size: 0.88rem; color: var(--soluk); line-height: 1.4; margin-top: 2px; }
+
+/* ---------- Bos durum ---------- */
+.ra-siniflar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.ra-siniflar div { background: #F7FAFB; border: 1px solid var(--cizgi); border-radius: 14px; padding: 16px; }
+.ra-siniflar b { display: flex; align-items: center; gap: 8px; font-size: 1rem; color: var(--murekkep); }
+.ra-siniflar b i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.ra-siniflar span { display: block; color: var(--ikincil); font-size: 0.9rem; margin-top: 6px; line-height: 1.45; }
+.ra-alt-bilgi { color: var(--soluk); font-size: 0.88rem; text-align: center; margin-top: 6px; }
+
+/* ---------- Kenar cubugu ---------- */
+[data-testid="stSidebar"] { background: #F7FAFB; border-right: 1px solid var(--cizgi); }
+[data-testid="stSidebar"] h3 { font-size: 1.1rem !important; font-weight: 700 !important; color: var(--murekkep) !important; }
+[data-testid="stSidebar"] p, [data-testid="stSidebar"] li { font-size: 0.95rem; color: var(--ikincil); line-height: 1.5; }
+
+/* ---------- Tablet ---------- */
+@media (max-width: 960px) {
+  .ra-adimlar { grid-template-columns: repeat(3, 1fr); }
+  .ra-sonuc { grid-template-columns: 220px 1fr; gap: 22px; }
+  .ra-siniflar { grid-template-columns: 1fr 1fr; }
+}
+/* ---------- Telefon ---------- */
+@media (max-width: 640px) {
+  .block-container { padding: 3.2rem 0.9rem 2.4rem !important; }
+  .ra-ust { gap: 14px; margin-bottom: 18px; align-items: flex-start; }
+  .ra-retina { width: 60px; height: 60px; }
+  .ra-baslik { font-size: 2rem !important; }
+  .ra-alt { font-size: 1rem; }
+  .ra-kart { padding: 20px 18px; border-radius: 16px; }
+  .ra-sonuc { grid-template-columns: 1fr; gap: 18px; }
+  .ra-sonuc figure { max-width: 230px; margin: 0 auto; }
+  .ra-tani .ra-ad { font-size: 1.85rem; }
+  .ra-satir { grid-template-columns: 1fr 64px; row-gap: 6px; margin: 14px 0; }
+  .ra-satir .ra-cubuk { grid-column: 1 / -1; grid-row: 2; height: 14px; }
+  .ra-adimlar { grid-template-columns: 1fr 1fr; gap: 12px; }
+  .ra-siniflar { grid-template-columns: 1fr; }
+  [data-testid="stFileUploaderDropzone"] { flex-direction: column; min-height: 210px; text-align: center; gap: 16px; padding: 24px 18px !important; }
+  [data-testid="stFileUploaderDropzone"] > span, [data-testid="stFileUploaderDropzone"] > span > button[data-testid="stBaseButton-secondary"] { width: 100%; }
+  [data-testid="stFileUploaderDropzone"] button[data-testid="stBaseButton-secondary"] { min-height: 56px; }
+  div[data-testid="stButtonGroup"] > div { width: 100%; }
+  div[data-testid="stButtonGroup"] button { flex: 1 1 0; min-height: 52px; padding: 8px 8px !important; }
+  div[data-testid="stButtonGroup"] button p { font-size: 0.95rem !important; white-space: normal !important;
+    overflow: visible !important; text-overflow: clip !important; line-height: 1.25; }
+  div[data-testid="stButtonGroup"] button div, div[data-testid="stButtonGroup"] button span { overflow: visible !important; max-width: none !important; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+"""
+
+# Ustteki soyut retina cizimi (turuncu goz dibi, optik disk ve damarlar)
+RETINA_SVG = (
+    '<svg class="ra-retina" viewBox="0 0 100 100" role="img" aria-label="Retina çizimi">'
+    '<defs><radialGradient id="rg" cx="45%" cy="45%" r="60%">'
+    '<stop offset="0" stop-color="#F0A04B"/><stop offset="1" stop-color="#B4471F"/></radialGradient></defs>'
+    '<circle cx="50" cy="50" r="48" fill="#16263D"/><circle cx="50" cy="50" r="42" fill="url(#rg)"/>'
+    '<g fill="none" stroke="#7A1F12" stroke-width="1.6" stroke-linecap="round" opacity="0.85">'
+    '<path d="M68 46 C58 34 44 28 26 30"/><path d="M68 46 C56 40 42 40 30 46"/>'
+    '<path d="M68 50 C58 60 44 66 28 66"/><path d="M68 50 C60 58 50 72 44 84"/>'
+    '<path d="M68 46 C66 32 60 22 52 14"/></g>'
+    '<circle cx="69" cy="48" r="7.5" fill="#FBE3A6"/><circle cx="69" cy="48" r="3.2" fill="#FFF6DC"/>'
+    '<circle cx="44" cy="50" r="3.6" fill="#8C2A14" opacity="0.7"/></svg>'
+)
 
 
 # ============================================================
@@ -84,20 +297,119 @@ def isi_haritasi_bindir(renkli: np.ndarray, harita: np.ndarray) -> np.ndarray:
     return cv2.addWeighted(renkli, 0.6, renkli_harita, 0.4, 0)
 
 
+def resim_veri(goruntu: np.ndarray, boyut: int = 420) -> str:
+    """Goruntuyu HTML icinde gosterilebilecek kucuk bir JPEG'e (base64) cevirir."""
+    if goruntu.dtype != np.uint8:
+        goruntu = np.clip(goruntu * 255 if goruntu.max() <= 1.0 else goruntu, 0, 255).astype(np.uint8)
+    if goruntu.ndim == 2:
+        goruntu = cv2.cvtColor(goruntu, cv2.COLOR_GRAY2RGB)
+    goruntu = cv2.resize(goruntu, (boyut, boyut), interpolation=cv2.INTER_AREA)
+    tamam, tampon = cv2.imencode(".jpg", cv2.cvtColor(goruntu, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
+    return "data:image/jpeg;base64," + base64.b64encode(tampon.tobytes()).decode() if tamam else ""
+
+
+def html_yaz(icerik: str):
+    """HTML parcasini sayfaya basar (Markdown bosluklarindan etkilenmesin diye satirlari birlestirir)."""
+    st.markdown(" ".join(satir.strip() for satir in icerik.splitlines()), unsafe_allow_html=True)
+
+
+def ust_bolum():
+    html_yaz(f"""<div class="ra-ust">{RETINA_SVG}<div>
+        <h1 class="ra-baslik">RETINA-AI</h1>
+        <p class="ra-alt">Göz dibi (fundus) fotoğrafını yükleyin. Sistem fotoğrafı işler ve normal, diyabetik
+        retinopati, glokom ya da katarakt sınıflarından hangisine benzediğini gösterir.</p></div></div>""")
+
+
+def sonuc_karti(olasiliklar: dict, gorsel: np.ndarray, gorsel_aciklama: str, model_etiketi: str):
+    en_iyi = max(olasiliklar, key=olasiliklar.get)
+    guven = olasiliklar[en_iyi]
+    sirali = sorted(olasiliklar.items(), key=lambda kv: kv[1], reverse=True)
+    satirlar = "".join(
+        f'<div class="ra-satir{" ra-secili" if s == en_iyi else ""}">'
+        f'<div class="ra-isim"><i style="background:{SINIF_RENK[s]}"></i>{SINIFLAR[s]}</div>'
+        f'<div class="ra-cubuk"><div style="width:{p * 100:.1f}%;background:{SINIF_RENK[s]}"></div></div>'
+        f'<div class="ra-yuzde">%{p * 100:.1f}</div></div>'
+        for s, p in sirali
+    )
+    kararsizlik = ""
+    if guven < KARARSIZLIK_ESIGI:
+        (s1, p1), (s2, p2) = sirali[0], sirali[1]
+        kararsizlik = (f'<div class="ra-kutu uyari"><b>Model bu görüntüde kararsız.</b> {SINIFLAR[s1]} %{p1 * 100:.1f}, '
+                       f"{SINIFLAR[s2]} %{p2 * 100:.1f}. Bu sonuç güvenilir değil.</div>")
+
+    html_yaz(f"""<div class="ra-kart"><div class="ra-sonuc">
+        <figure><img src="{resim_veri(gorsel)}" alt="{html.escape(gorsel_aciklama)}">
+        <figcaption>{html.escape(gorsel_aciklama)}</figcaption></figure>
+        <div><p class="ra-etiket">Tahmin</p>
+        <div class="ra-tani"><span class="ra-nokta" style="background:{SINIF_RENK[en_iyi]}"></span>
+        <span class="ra-ad">{SINIFLAR[en_iyi]}</span></div>
+        <p class="ra-guven">Model güveni <b>%{guven * 100:.1f}</b></p>
+        <p class="ra-aciklama">{SINIF_ACIKLAMA[en_iyi]}</p>
+        {satirlar}{kararsizlik}
+        <p class="ra-meta">Kullanılan model: {html.escape(model_etiketi)}</p>
+        </div></div></div>""")
+
+
+def adimlar_karti(adimlar: list):
+    """adimlar: [(baslik, aciklama, goruntu veya None, bos_mesaj)]"""
+    hucreler = ""
+    for i, (baslik, aciklama, goruntu, bos) in enumerate(adimlar, start=1):
+        icerik = (f'<img src="{resim_veri(goruntu)}" alt="{html.escape(baslik)}">' if goruntu is not None
+                  else f'<div class="ra-bos">{html.escape(bos)}</div>')
+        hucreler += (f'<div class="ra-adim"><figure><div class="ra-resim">{icerik}<span class="ra-no">{i}</span></div>'
+                     f"<figcaption><b>{html.escape(baslik)}</b><span>{html.escape(aciklama)}</span></figcaption>"
+                     "</figure></div>")
+    html_yaz(f"""<div class="ra-kart"><h2>Görüntü işleme adımları</h2>
+        <p class="ra-not">Fotoğrafın sisteme girdikten sonra geçtiği aşamalar.</p>
+        <div class="ra-adimlar">{hucreler}</div></div>""")
+
+
+def bos_durum():
+    hucreler = "".join(f'<div><b><i style="background:{SINIF_RENK[s]}"></i>{SINIFLAR[s]}</b>'
+                       f"<span>{SINIF_ACIKLAMA[s]}</span></div>" for s in SINIFLAR)
+    html_yaz(f"""<div class="ra-kart"><h2>Sistemin tanıdığı sınıflar</h2>
+        <p class="ra-not">Bir fotoğraf yüklediğinizde tahmin ve işleme adımları burada görünür.</p>
+        <div class="ra-siniflar">{hucreler}</div></div>
+        <p class="ra-alt-bilgi">Bu sistem teşhis koymaz; yalnızca eğitim amaçlı bir simülasyondur.</p>""")
+
+
+def model_secimi() -> str:
+    if hasattr(st, "segmented_control"):
+        secim = st.segmented_control("Model", MODEL_SECENEKLERI, default=MODEL_SECENEKLERI[0],
+                                     label_visibility="collapsed")
+        return secim or MODEL_SECENEKLERI[0]
+    return st.radio("Model", MODEL_SECENEKLERI, horizontal=True, label_visibility="collapsed")
+
+
+def kenar_cubugu():
+    with st.sidebar:
+        st.markdown("### Proje hakkında")
+        st.markdown("Medikal Görüntü İşleme dersi grup projesi. Kaggle fundus veri seti, temizlenmiş v2 bölmesi "
+                    "(sınıf başına 288 görüntü) ile eğitildi.")
+        st.markdown("### Modeller")
+        st.markdown("- **CNN:** EfficientNet-B0, fotoğrafa doğrudan bakar. Test doğruluğu %80.7.\n"
+                    "- **SVM:** Damar, lezyon ve netlik ölçümlerine bakar.")
+        st.markdown("### Sınırlılıklar")
+        st.markdown("Glokom ve normal en çok karışan sınıflar. Karanlık veya bulanık fotoğraflar katarakt "
+                    "sanılabilir. Eğitim verisine benzemeyen fotoğraflarda sonuç güvenilir değildir.")
+
+
 # ============================================================
 # ARAYUZ
 # ============================================================
 
 def main():
-    st.set_page_config(page_title="RETINA-AI", page_icon="👁️", layout="wide")
-    st.title("👁️ RETINA-AI")
-    st.caption("Fundus görüntüsünden 4 sınıflı göz hastalığı sınıflandırma · Akademik simülasyon")
+    st.set_page_config(page_title="RETINA-AI", page_icon="👁️", layout="wide", initial_sidebar_state="collapsed")
+    st.markdown(STIL, unsafe_allow_html=True)
+    kenar_cubugu()
+    ust_bolum()
 
-    with st.sidebar:
-        st.header("Ayarlar")
-        model_turu = st.radio("Model", ["CNN (derin öğrenme)", "SVM (klasik)"])
-        st.info("Sınıflar: Normal, Diyabetik Retinopati, Glokom, Katarakt")
-        st.warning("⚠️ Bu sistem teşhis koymaz. Yalnızca eğitim amaçlıdır.")
+    with st.container(border=True):
+        html_yaz('<p class="ra-yukle-baslik">Fotoğraf yükle</p>'
+                 '<p class="ra-yukle-not">Önce modeli seçin, sonra göz dibi fotoğrafını sürükleyin ya da seçin.</p>')
+        model_turu = model_secimi()
+        dosya = st.file_uploader("Retina (fundus) fotoğrafı", type=["jpg", "jpeg", "png"],
+                                 label_visibility="collapsed")
 
     cnn_secili = model_turu.startswith("CNN")
     model, model_hatasi = cnn_modelini_yukle() if cnn_secili else (None, None)
@@ -105,15 +417,14 @@ def main():
         st.error(model_hatasi)
         return
 
-    dosya = st.file_uploader("Retina (fundus) görüntüsünü yükleyin", type=["jpg", "jpeg", "png"])
     if dosya is None:
-        st.info("Başlamak için bir fundus görüntüsü yükleyin.")
+        bos_durum()
         return
 
     ham = np.array(Image.open(dosya).convert("RGB"))
     bgr = cv2.cvtColor(ham, cv2.COLOR_RGB2BGR)  # Kisi 1 ve Kisi 4'un kodu BGR bekliyor
 
-    with st.spinner("İşleniyor..."):
+    with st.spinner("Fotoğraf işleniyor..."):
         islenmis = on_isle(bgr)
         renkli = cv2.cvtColor(boyutlandir(roi_kirp(bgr)), cv2.COLOR_BGR2RGB)
 
@@ -128,53 +439,33 @@ def main():
             # CNN on_isle ciktisini degil, ham BGR goruntuyu alir (renk bilgisi icin)
             olasiliklar = tahmin(bgr, model)
             isi = isi_haritasi_bindir(renkli, gradcam(bgr, model=model))
-            isi_aciklama = "Grad-CAM: modelin baktığı yer"
+            model_etiketi = f"CNN (EfficientNet-B0), {cnn_model_adi()}"
         else:
             olasiliklar = svm_tahmin(islenmis)
             isi = None
+            model_etiketi = "SVM (geçici örnek veri)"
 
-    st.subheader("1. Görüntünün yolculuğu")
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.image(renkli, caption="Kırpılmış retina")
-    k2.image(islenmis, caption="Ön işlenmiş (yeşil kanal + CLAHE)", clamp=True)
-    k3.image(damarlar, caption=f"Damar haritası (yoğunluk: {yogunluk:.3f})")
     if isi is not None:
-        k4.image(isi, caption=isi_aciklama)
+        sonuc_karti(olasiliklar, isi, "Grad-CAM: kırmızı bölgeler modelin en çok baktığı yerler", model_etiketi)
     else:
-        k4.info("Grad-CAM yalnızca CNN modelinde gösterilir.")
-    if disk is None:
-        k5.warning("Optik disk güvenilir şekilde bulunamadı (bulanık, karanlık veya disk görüntü dışında olabilir).")
-    else:
-        k5.image(
-            disk_gorsel,
-            caption=f"Optik disk (çukur/disk oranı ≈ {disk['cukur_disk_orani']}, yaklaşık değer)",
-        )
+        sonuc_karti(olasiliklar, renkli, "Yüklenen fotoğraf", model_etiketi)
+        html_yaz('<div class="ra-kutu bilgi">SVM tahminleri şu an örnek (geçici) verilerdir. Kişi 3\'ün gerçek '
+                 "görüntülerle ve v2 ile eğitilmiş modeli gelince gerçek olacak.</div>")
 
-    st.subheader("2. Sonuç")
-    en_iyi = max(olasiliklar, key=olasiliklar.get)
-    sol, sag = st.columns([1, 2])
-    with sol:
-        st.markdown(f"#### Tahmin: {SINIFLAR[en_iyi]}")
-        st.metric("Model güven değeri", f"%{olasiliklar[en_iyi] * 100:.1f}")
-        st.caption(f"Kullanılan model: {model_turu}" + (f" · {cnn_model_adi()}" if cnn_secili else ""))
-    with sag:
-        for sinif, p in sorted(olasiliklar.items(), key=lambda kv: kv[1], reverse=True):
-            st.write(f"{SINIFLAR[sinif]} · %{p * 100:.1f}")
-            st.progress(p)
+    disk_aciklama = (f"Çukur/disk oranı yaklaşık {disk['cukur_disk_orani']}." if disk is not None
+                     else "Disk güvenilir şekilde bulunamadı.")
+    adimlar_karti([
+        ("Kırpılmış retina", "Siyah kenarlar kesildi, 512×512'ye getirildi.", renkli, ""),
+        ("Ön işleme", "Yeşil kanal ve CLAHE ile damarlar belirginleşti.", islenmis, ""),
+        ("Damar haritası", f"Damarların retina alanına oranı {yogunluk:.3f}.", damarlar, ""),
+        ("Optik disk", disk_aciklama, disk_gorsel if disk is not None else None,
+         "Disk bulunamadı. Fotoğraf bulanık, karanlık ya da disk kenara çok yakın olabilir."),
+        ("Grad-CAM", "Modelin karar verirken en çok baktığı bölgeler kırmızı.", isi,
+         "Grad-CAM yalnızca CNN modelinde gösterilir."),
+    ])
 
-    if olasiliklar[en_iyi] < KARARSIZLIK_ESIGI:
-        ilk_iki = sorted(olasiliklar.items(), key=lambda kv: kv[1], reverse=True)[:2]
-        st.warning(
-            f"⚠️ Model bu görüntüde kararsız ({SINIFLAR[ilk_iki[0][0]]} %{ilk_iki[0][1] * 100:.1f} / "
-            f"{SINIFLAR[ilk_iki[1][0]]} %{ilk_iki[1][1] * 100:.1f}). Sonuç güvenilir değil."
-        )
-
-    st.warning(
-        "⚠️ Bu sonuç yalnızca akademik simülasyon amaçlıdır. Tıbbi teşhis yerine geçmez. "
-        "Karanlık, bulanık veya kötü çekilmiş fotoğraflar katarakt olarak sınıflandırılabilir."
-    )
-    if not cnn_secili:
-        st.caption("Not: SVM tahminleri şu an örnek (geçici) verilerdir. Kişi 3'ün gerçek görüntülerle ve v2 ile eğitilmiş modeli gelince gerçek olacak.")
+    html_yaz('<div class="ra-kutu uyari">Bu sonuç yalnızca akademik simülasyon amaçlıdır ve tıbbi teşhis yerine '
+             "geçmez. Karanlık, bulanık veya kötü çekilmiş fotoğraflar katarakt olarak sınıflandırılabilir.</div>")
 
 
 if __name__ == "__main__":
