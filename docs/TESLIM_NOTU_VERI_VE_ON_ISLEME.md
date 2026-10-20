@@ -48,3 +48,18 @@ Bu rapor, proje kurallarinda belirlenen teslim sablonuna tam olarak uygun sekild
 
 ### Karsilastigim sorun:
 Kaggle veri setinde `625_left.jpg` ve `1415_right.jpg` adli iki gorselin ayni MD5 hash degeriyle hem 'cataract' hem de 'glaucoma' klasorunde yer aldigi ortaya cikti (capraz sinif cakisimi). Bu durum ayni hastanin iki farkli sinifta gorunmesi sebebiyle etiket kirliligine ve veri sizintisina yol acabilirdi. Glokom sinifi tam 1007 ornege sahip oldugu icin, bu 2 cakisik ornek sayisi fazla olan Katarakt sinifindan ayiklanarak veri sizintisi sifirlandi.
+
+---
+
+### Ek Not: Veri Seti v2 Revizyonu ve Cozum Analizi (20 Ekim 2026)
+
+#### 1. v1 Bolmesindeki Sorun ve Kisayol Ogrenme (Shortcut Learning)
+Kaggle veri setindeki katarakt ve glokom siniflarinda yer alan 1223 adet 256x256 boyutundaki gorselin, orijinal fotograflarin dondurulmus ve cevrilmis kopyalari oldugu ortaya cikmistir. Bu kopyalar dosya adlarindaki farklilik sebebiyle ayri hasta gibi algilanmis ve hem egitim hem test kumelerine dagilarak hasta bazli sizintiya neden olmustur. Model hastalik morfolojisi yerine goruntu boyutunu ogrenerek (shortcut learning) kucuk goruntuleri dogrudan katarakt veya glokom olarak tahmin etmistir.
+
+#### 2. v2 Bolmesinde Nasil Cozuldu?
+- Cozunurluk Filtresi: Tum 256x256 kopyalar ve asiri buyuk goruntuler elendi. Yalnizca standart 512x512 cozunurlukteki orijinal goruntuler secildi.
+- Sinif Dengesi: 512x512 cozunurlukte en az sayiya sahip olan Katarakt sinifi (288 adet) referans alinarak her 4 siniftan tam 288'er adet (toplam 1152 gorsel) ile tam dengeli kume kuruldu.
+- Hasta Yonetimi ve Stratified Split: ODIR (`odir_<id>`) ve EyePACS (`eyepacs_<id>`) kaynaklari hasta anahtarinda birlestirilerek ayni hastanin iki gozunun ayni kumede kalmasi saglandi (seed=42).
+- Dogrulama Sonuclari: `src/verify_splits.py` ile `data/splits/veri_bolme_v2.csv` tablosu dogrulanmis, kumeler arasi hasta kesisimi 0 (%0.0 sizinti) ve MD5 kopya sayisi 0 olarak kesinlesmistir.
+- Karsilastirma Guvencesi: Eski `veri_bolme.csv` tablosu silinmeyip korunmus, makalede once/sonra basari karsilastirmasi icin referans birakilmistir.
+
