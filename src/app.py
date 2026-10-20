@@ -8,9 +8,10 @@ Gercek kod:
     on_isle            -> Kisi 1 (src/preprocessing.py)
     damar + optik disk -> Kisi 2 (src/anatomy.py)
     CNN tahmin+Grad-CAM -> Kisi 4 (src/cnn_models.py)
-                          Model dosyasi: models/model_efficientnet.pth (Drive'dan indirilir)
+                          Model dosyasi: models/model_efficientnet_v2.pth (ortak Drive'dan indirilir)
+                          Eski v1 modeli (model_efficientnet.pth) sizinti icerdigi icin kullanilmaz.
 Gecici dublorler:
-    svm_tahmin         -> Kisi 3 (src/lesions.py + SVM gelince degisecek)
+    svm_tahmin         -> Kisi 3 (gercek goruntulerle ve v2 bolmesiyle egitilmis SVM gelince degisecek)
 """
 
 import cv2
@@ -23,6 +24,9 @@ from preprocessing import boyutlandir, on_isle, roi_kirp
 
 # KISI 2 - Gercek damar ve optik disk kodu
 from anatomy import damar_haritasi, damar_yogunlugu, disk_isaretle, optik_disk
+
+# En yuksek olasilik bu esigin altindaysa arayuz "kararsiz tahmin" uyarisi gosterir
+KARARSIZLIK_ESIGI = 0.60
 
 SINIFLAR = {
     "normal": "🟢 Normal",
@@ -46,10 +50,16 @@ def cnn_modelini_yukle():
     if not VARSAYILAN_MODEL_YOLU.exists():
         return None, (
             f"Model dosyası bulunamadı: {VARSAYILAN_MODEL_YOLU}\n\n"
-            "Drive'daki model_efficientnet.pth dosyasını proje klasöründeki "
-            "models klasörüne koyun."
+            f"Ortak Drive'daki models/{VARSAYILAN_MODEL_YOLU.name} dosyasını proje klasöründeki "
+            "models klasörüne koyun. Eski model_efficientnet.pth (v1) kullanılmamalı."
         )
     return model_yukle(VARSAYILAN_MODEL_YOLU), None
+
+
+def cnn_model_adi() -> str:
+    """Arayuzde gosterilecek model dosyasinin adi (orn. model_efficientnet_v2.pth)."""
+    from cnn_models import VARSAYILAN_MODEL_YOLU
+    return VARSAYILAN_MODEL_YOLU.name
 
 
 # ============================================================
@@ -146,18 +156,25 @@ def main():
     with sol:
         st.markdown(f"#### Tahmin: {SINIFLAR[en_iyi]}")
         st.metric("Model güven değeri", f"%{olasiliklar[en_iyi] * 100:.1f}")
-        st.caption(f"Kullanılan model: {model_turu}")
+        st.caption(f"Kullanılan model: {model_turu}" + (f" · {cnn_model_adi()}" if cnn_secili else ""))
     with sag:
         for sinif, p in sorted(olasiliklar.items(), key=lambda kv: kv[1], reverse=True):
             st.write(f"{SINIFLAR[sinif]} · %{p * 100:.1f}")
             st.progress(p)
+
+    if olasiliklar[en_iyi] < KARARSIZLIK_ESIGI:
+        ilk_iki = sorted(olasiliklar.items(), key=lambda kv: kv[1], reverse=True)[:2]
+        st.warning(
+            f"⚠️ Model bu görüntüde kararsız ({SINIFLAR[ilk_iki[0][0]]} %{ilk_iki[0][1] * 100:.1f} / "
+            f"{SINIFLAR[ilk_iki[1][0]]} %{ilk_iki[1][1] * 100:.1f}). Sonuç güvenilir değil."
+        )
 
     st.warning(
         "⚠️ Bu sonuç yalnızca akademik simülasyon amaçlıdır. Tıbbi teşhis yerine geçmez. "
         "Karanlık, bulanık veya kötü çekilmiş fotoğraflar katarakt olarak sınıflandırılabilir."
     )
     if not cnn_secili:
-        st.caption("Not: SVM tahminleri şu an örnek (geçici) verilerdir. Kişi 3'ün modeli gelince gerçek olacak.")
+        st.caption("Not: SVM tahminleri şu an örnek (geçici) verilerdir. Kişi 3'ün gerçek görüntülerle ve v2 ile eğitilmiş modeli gelince gerçek olacak.")
 
 
 if __name__ == "__main__":
