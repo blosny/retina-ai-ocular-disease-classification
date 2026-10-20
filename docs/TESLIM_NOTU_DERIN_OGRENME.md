@@ -1,26 +1,26 @@
 # RETINA-AI: Derin Ogrenme Sorumlusu (Kisi 4) Teslim Notu
 
-> Durum: model gercek veriyle egitildi ve test edildi (13 Ekim 2026, Colab T4). Test dogrulugu %91.2. Kenar testiyle kaynak/kamera kisayolu kontrol edildi.
+> **Durum (20 Ekim 2026):** v1 bolmesinde (veri_bolme.csv) kopya sizintisi ve cozunurluk kisayolu bulundu; v1 sonuclari (%91.2) gecersizdir. `veri_bolme_v2.csv` Kisi 1 tarafindan dogrulanip onaylandi (PR #8, #9). Model bu bolmeyle egitildi: **test dogrulugu %80.7** (171 goruntu). Kenar testi, cozunurluk testi ve 5-katli capraz dogrulama v2 modeliyle tekrarlanacak (asagida "Bekleyenler").
 
 ---
 
 ### Ne yaptim:
-1. `src/cnn_models.py`: EfficientNet-B0 transfer learning, egitim dongusu, erken durdurma, tahmin ve Grad-CAM.
-2. `notebooks/04_derin_ogrenme_cnn.ipynb`: Colab'da tek tikla egitim, test ve figur uretimi.
+1. `src/cnn_models.py`: EfficientNet-B0 transfer learning, egitim dongusu, erken durdurma, tahmin, Grad-CAM, hasta bazli k-katli capraz dogrulama (`capraz_dogrulama`).
+2. `notebooks/04_derin_ogrenme_cnn.ipynb`: Colab'da egitim, test, Grad-CAM, kenar testi, cozunurluk testi ve capraz dogrulama.
 3. Arayuz (Kisi 5) icin 3 fonksiyon: `model_yukle()`, `tahmin(goruntu)`, `gradcam(goruntu, sinif=None)`.
-4. Test setindeki tum tahminleri `reports/cnn_test_tahminleri.csv` olarak kaydeden fonksiyon (Kisi 5 metrikleri buradan hesaplar).
-5. Her siniftan 1 dogru + 1 yanlis ornekle Grad-CAM figuru.
-6. Kenar testi: test goruntulerinin dis halkasi siyahla kapatilarak modelin kenar/kamera izlerine bagimliligi olculdu.
+4. Test tahminlerini ekipte anlasilan formatta kaydeden fonksiyon: `reports/cnn_test_tahminleri_v2.csv`.
+5. v1 modelinde kaynak/sizinti analizi (Kisi 5'in Grad-CAM sorusu uzerine) ve sonucunda `veri_bolme_v2.csv` taslagi (`src/veri_bolme_v2.py`). Kisi 1 `verify_splits.py` ile dogruladi ve onayladi (PR #8, #9).
 
 ---
 
 ### Neden yaptim:
-- **Transfer learning:** Sinif basina 705 egitim gorseli sifirdan CNN egitmek icin az. ImageNet'te ogrenilmis kenar/doku filtreleri retinaya uyarlanir.
-- **EfficientNet-B0:** Az parametreli (~5.3M) oldugu icin Colab'in ucretsiz GPU'sunda egitilebilir; gorev dagiliminda da bu model belirlendi.
+- **Transfer learning:** Sinif basina birkac yuz egitim gorseliyle sifirdan CNN egitmek yetersiz kalir. ImageNet'te ogrenilmis kenar/doku filtreleri retinaya uyarlanir.
+- **EfficientNet-B0:** Az parametreli (~5.3M), Colab'in ucretsiz GPU'sunda egitilebilir; gorev dagiliminda da bu model belirlendi.
 - **Renkli (RGB) girdi:** `on_isle()` tek kanalli yesil + CLAHE dondurur. Kataraktin pusu ve DR'deki sari eksudalar renkte daha belirgin oldugu icin CNN'e kirpilmis renkli retina verildi. Kirpma ve boyutlandirma `on_isle()` ile ayni (`roi_kirp` + 512x512), boylece Grad-CAM haritasi on islenmis goruntuyle ayni koordinatlarda. Yesil + CLAHE ile denemek icin `girdi_modu="yesil_clahe"`.
 - **Veri artirma:** Yatay cevirme + ±15° dondurme. Bulaniklastirma ve parlaklik/kontrast oynatma YOK, cunku bulaniklik kataraktin ayirt edici ipucu.
 - **Erken durdurma:** Dogrulama kaybi iyilesmeyi birakinca durup asiri ogrenmeyi (overfitting) onler.
-- **Grad-CAM:** Modelin optik disk / lezyonlar gibi gercek bulgulara mi, yoksa kenar ve koseler gibi kamera izlerine mi baktigini gostermek icin.
+- **Grad-CAM, kenar ve cozunurluk testleri:** Modelin gercek bulgulara mi (optik disk, lezyon, bulaniklik) yoksa kaynak izlerine mi (kenar, cozunurluk, kamera) baktigini olcmek icin.
+- **Capraz dogrulama:** v2 test seti sinif basina ~43 goruntu; tek bolmenin sonucu yaklasik ±6 puan oynayabilir. 5 katin ortalamasi ve standart sapmasi daha guvenilir.
 
 ---
 
@@ -33,6 +33,8 @@
 - Batch: 16, en fazla 30 epoch, erken durdurma sabri: 5, seed=42
 - Karisik hassasiyet (AMP) GPU'da acik
 - Grad-CAM hedef katmani: `model.features[-1]`
+- Bolme: `data/splits/veri_bolme_v2.csv` (512x512, sinif basina 288, hasta bazli %70/15/15, seed=42)
+- Capraz dogrulama: `StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)`, grup = hasta; kat i test, kat i+1 dogrulama, kalan uc kat egitim.
 
 ---
 
@@ -40,70 +42,83 @@
 ```python
 from cnn_models import model_yukle, tahmin, gradcam
 
-model = model_yukle("models/model_efficientnet.pth")  # bir kez, onbellekte tutulur
+model = model_yukle()    # varsayilan: models/model_efficientnet_v2.pth
 p = tahmin(bgr)          # {"normal": .., "diabetic_retinopathy": .., "glaucoma": .., "cataract": ..}
 h = gradcam(bgr)         # 512x512, float32, 0-1 (tahmin edilen sinif icin)
 h = gradcam(bgr, sinif="glaucoma")  # istenen sinif icin
 ```
 - Girdi `on_isle()` ile ayni: dosya yolu veya BGR numpy dizisi. **`on_isle()` ciktisi degil.**
 - Isi haritasi `boyutlandir(roi_kirp(bgr))` ile ayni koordinatlarda.
+- **Degisiklik:** Varsayilan model dosyasi artik `models/model_efficientnet_v2.pth`. Eski `model_efficientnet.pth` (v1) kullanilmamali.
 
 ---
 
 ### Cikti/gorsel nerede:
-- Kod: `src/cnn_models.py`, `notebooks/04_derin_ogrenme_cnn.ipynb`
-- Model: `models/model_efficientnet.pth` (GitHub'a yuklenmez). Ortak Drive klasorunde yazma izni olmadigi icin simdilik Kisi 4'un kendi Drive'inda: `MyDrive/retina-ai-k4/models/`. Ortak klasore tasinacak.
-- Egitim grafigi: `reports/figures/cnn_egitim_grafigi.png`
-- Egitim gecmisi: `reports/cnn_egitim_gecmisi.json`
-- Test tahminleri: `reports/cnn_test_tahminleri.csv`
-- Grad-CAM: `reports/figures/gradcam_ornekleri.png`
-- Kenar testi: `reports/cnn_kenar_testi.csv`, `reports/cnn_kenar_testi_ozet.csv`
+- Kod: `src/cnn_models.py`, `src/veri_bolme_v2.py`, `notebooks/04_derin_ogrenme_cnn.ipynb`
+- Bolme: `data/splits/veri_bolme_v2.csv` (eski `veri_bolme.csv` karsilastirma icin duruyor)
+- Model (GitHub'a yuklenmez, ortak Drive): `models/model_efficientnet_v2.pth`
+- Ortak Drive `reports/`: `cnn_test_tahminleri_v2.csv`, `cnn_egitim_gecmisi_v2.json`, `figures/cnn_egitim_grafigi_v2.png`, `figures/gradcam_ornekleri_v2.png`
+- Kenar, cozunurluk ve capraz dogrulama: `cnn_kenar_testi_ozet_v2.csv`, `cnn_cozunurluk_testi_v2.csv`, `cnn_capraz_dogrulama_v2.csv`
+- v1 ciktilari (gecersiz, sadece karsilastirma; repoda `reports/` altinda ekleri olmadan): `cnn_test_tahminleri.csv`, `cnn_egitim_gecmisi.json`, `cnn_kenar_testi*.csv`, `figures/cnn_egitim_grafigi.png`, `figures/gradcam_ornekleri.png`, `model_efficientnet.pth`
 
 ---
 
-### Sonuclar:
+### Sonuclar (v2, gecerli):
 
-**Egitim** (`cnn_egitim_grafigi.png`)
-- 13 epoch'ta erken durdurma ile durdu (epoch basina ~60 sn, toplam ~13 dk).
-- En iyi model: **epoch 8**, dogrulama kaybi 0.395, dogrulama dogrulugu **%92.4**.
-- Son epoch'ta egitim %99 / dogrulama %93: ~6 puanlik fark hafif asiri ogrenmeye isaret ediyor; erken durdurma bu yuzden devreye girdi.
+**Egitim** (`cnn_egitim_grafigi_v2.png`)
+- 808 egitim / 173 dogrulama goruntusu. 12 epoch'ta erken durdurma (epoch basina ~12 sn).
+- En iyi model: **epoch 7**, dogrulama kaybi 0.598, dogrulama dogrulugu %82.7.
+- Egitim dogrulugu %99'a cikarken dogrulama %80 civarinda kaldi: veri azaldigi icin asiri ogrenme v1'e gore daha belirgin.
 
-**Test seti** (604 goruntu, sinif basina 151; model egitimde hic gormedi)
+**Test seti** (171 goruntu; model egitimde hic gormedi)
 
-| Sinif | Dogruluk |
-|---|---|
-| Katarakt | %98.0 |
-| Diyabetik retinopati | %97.4 |
-| Normal | %88.1 |
-| Glokom | %81.5 |
-| **Genel** | **%91.2** |
+| Sinif | Test goruntusu | v2 dogruluk | v1 (gecersiz) |
+|---|---|---|---|
+| Katarakt | 42 | %92.9 | %98.0 |
+| Diyabetik retinopati | 43 | %90.7 | %97.4 |
+| Normal | 43 | %72.1 | %88.1 |
+| Glokom | 43 | %67.4 | %81.5 |
+| **Genel** | **171** | **%80.7** | %91.2 |
 
-- En cok karisan ikili glokom ve normal. Glokom tanisi klinikte de yalnizca fundus fotografina degil goz ici basinci ve gorme alanina dayandigi icin beklenen bir zayiflik.
-- Precision, recall, F1 ve confusion matrix Kisi 5 tarafindan `cnn_test_tahminleri.csv` uzerinden hesaplanacak.
+- Her yanlis tahmin sinif dogrulugunu ~2.3 puan degistirir; genel sonucun %95 guven araligi yaklasik ±6 puan. Kesin ortalama capraz dogrulamayla verilecek.
+- Glokom ile normal en cok karisan ikili. Glokom tanisi klinikte de yalnizca fundus fotografina degil goz ici basinci ve gorme alanina dayanir. Arayuzde bazi fotograflarda gorulen "%40 normal / %40 glokom" kararsizligi bununla uyumlu.
 
-**Grad-CAM** (`gradcam_ornekleri.png`)
-- Glokom: isi optik diskte yogunlasiyor (dogru ve yanlis ornekte de). Tibben beklenen bolge.
-- Normal: optik disk ve damar kemeri. Glokom sanilan normal ornekte de model diske bakiyor.
-- Diyabetik retinopati: dogru ornekte lezyon odagi net degil; yanlis ornekte isi goruntunun sag kenarinda.
-- Katarakt: dogru ornek farkli bir kaynaktan gelmis gibi (yuvarlak degil, kenarlarinda beyaz yaylar) ve isi kenarlarda. Bu, kenar testiyle ayrica kontrol edildi.
+**Grad-CAM** (`gradcam_ornekleri_v2.png`)
+- Glokom: dogru ornekte isi tam optik diskte.
+- Diyabetik retinopati: dogru ornekte isi lezyon bolgesinde (eksuda halkasi). v1'de bu odak yoktu.
+- Normal: dogru ornekte damar kemeri; glokom sanilan normal ornekte optik disk.
+- Katarakt: dogru ornekte isi ust kenarda. ODIR goruntulerinin ustundeki kucuk centik/isaretle ilgili olabilir; v2 kenar testiyle kontrol edilecek.
+- Karanlik/bulanik bir glokom goruntusu katarakt sanildi (isi ust kenarda): v1'deki "detay yoksa katarakt" davranisi suruyor olabilir.
 
-**Kenar testi** (`cnn_kenar_testi_ozet.csv`, test seti, sinif bazinda dogruluk %)
+---
 
-| Sinif | Orijinal | Kenar %15 kapali | Kenar %30 kapali | Sadece kenar |
-|---|---|---|---|---|
-| Katarakt | 98.0 | 96.0 | 97.4 | 99.3 |
-| Diyabetik retinopati | 97.4 | 89.4 | 53.6 | 88.1 |
-| Glokom | 81.5 | 79.5 | 74.8 | 2.0 |
-| Normal | 88.1 | 87.4 | 82.8 | 16.6 |
+### v1 bolmesinde bulunan sorunlar (analiz):
 
-- Katarakt: dis halkanin %30'u kapatilinca bile %97.4. Model katarakti kenar/kamera izlerinden degil retina iceriginden taniyor; Grad-CAM'deki endise dogrulanmadi.
-- Glokom: merkez kapatilinca %2'ye dusuyor. Model optik diske dayaniyor (Grad-CAM ile tutarli).
-- "Sadece kenar" kosulunda ortasi siyah goruntulerin cogu (glokomlarin %88'i, normallerin %69'u) katarakt olarak siniflandiriliyor. Model "detay gorunmuyorsa katarakt" seklinde ogrenmis; karanlik veya kotu cekilmis bir fotograf katarakt sanilabilir. Arayuzdeki uyari notunda belirtilmeli.
-- Diyabetik retinopati: kenarin %30'u kapaninca %97.4'ten %53.6'ya dusuyor. Lezyonlarin cevre retinaya yayilmasindan mi yoksa DR goruntulerinin farkli bir kaynaktan gelmesinden mi kaynaklandigi bu testle ayrilamiyor. Kesin cevap icin baska bir veri setiyle (ornegin ODIR-5K) dis test gerekir.
+Kisi 5'in "katarakt Grad-CAM'i retina disina bakiyor" sorusu uzerine yapilan testler (`cnn_kaynak_testi.csv`):
+
+1. **Kopya sizintisi:** 1223 adet 256x256 goruntu (`_N_xxxxxxx.jpg`, Keras augmentasyon isimlendirmesi) ~804 orijinalin dondurulmus/aynalanmis kopyalari ve sadece katarakt/glokomda var. Her kopya ayri hasta sayildigi icin hasta bazli bolme bunlari ayiramadi: test setindeki 178 kucuk goruntunun 77'sinin kopyasi egitim setindeydi. En yakin komsu analizinde test-egitim cift benzerligi 0.998'e kadar cikti.
+2. **Cozunurluk kisayolu:** DR ve normal test goruntuleri 256x256'ya dusurulunce DR'nin %0'i, normalin %1.3'u dogru siniflandi; neredeyse hepsi glokom/katarakt dendi. Model "dusuk cozunurluk = katarakt/glokom" ogrenmisti (shortcut learning).
+3. **Sisirilmis glokom basarisi:** v1 modelinde glokom dogrulugu 256x256 grupta %94.3, diger goruntulerde %63.5 idi.
+4. **Onceki kenar testi yorumu eksikti:** Kenar testi sadece goruntu kenarina bagimliligi olcer; goruntunun tamamina yayilmis cozunurluk izini yakalayamaz. "Kamera/kaynak kisayolu yok" sonucu bu yuzden fazla genellemeydi.
+
+---
+
+### Sinirliliklar:
+- **DR farkli kaynaktan:** DR goruntulerinin tamami `.jpeg` ve dosya kimlikleri 100-11598 araliginda (muhtemelen EyePACS); diger uc sinif ODIR-5K'dan. v2 bu kaynak farkini cozmez; DR basarisinin bir kismi kaynak izinden gelebilir. Cozum: DR goruntulerini de ODIR'den alarak dis test (Kisi 5 planinda "zaman kalirsa").
+- **Veri miktari:** v2'de 1152 goruntu (v1: 4028). Test seti kucuk, sonuc belirsizligi yuksek.
+- Hiperparametreler ayarlanmadi; tek seed ile egitildi.
+
+---
+
+### Bekleyenler (v2 modeliyle):
+- [ ] Kenar testi (5b)
+- [ ] Cozunurluk testi (5c)
+- [ ] 5-katli capraz dogrulama (5d): ortalama ± standart sapma
+- [ ] Model ve raporlarin ortak Drive'a kopyalanmasi
+- [ ] RGB ve yesil+CLAHE girdi karsilastirmasi (istege bagli)
 
 ---
 
 ### Karsilastigim sorun:
-- Grup mesajinda `on_isle()` ciktisi "512x512 RGB" yaziyor, ama kod tek kanalli (yesil + CLAHE) gri goruntu donduruyor. Bu yuzden CNN fonksiyonlari ham BGR goruntuyu aliyor; `app.py`'de `tahmin_et`/`gradcam` cagrilarina `islenmis` yerine `bgr` verilmeli.
-- Ortak Drive klasorunde yazma iznim yok; model ve raporlar simdilik kendi Drive'imda.
-- Henuz yapilmadi: RGB ve yesil+CLAHE girdi karsilastirmasi, farkli seed'lerle tekrar, dis veri setiyle test.
+- v1 bolmesindeki kopya sizintisi ve cozunurluk kisayolu (yukarida). Sebep veri setinin yapisi; 256x256 kopyalarin dosya adlari hasta kimligi kalibina uymadigi icin her biri ayri hasta sayildi.
+- `on_isle()` tek kanalli gri goruntu dondurur; CNN fonksiyonlari ham BGR goruntu alir.

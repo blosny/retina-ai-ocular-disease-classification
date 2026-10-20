@@ -64,7 +64,13 @@ IMAGENET_ORT = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 PROJE_KOKU = Path(__file__).resolve().parent.parent
-VARSAYILAN_MODEL_YOLU = PROJE_KOKU / "models" / "model_efficientnet.pth"
+# v2: veri_bolme_v2.csv ile egitilmis model. Eski (v1) model sizinti/kisayol icerdigi icin kullanilmamali.
+VARSAYILAN_MODEL_YOLU = PROJE_KOKU / "models" / "model_efficientnet_v2.pth"
+# Hangi bolme dosyasi kullanilacak (data/splits/ altinda). Ekip karariyla varsayilan v2.
+# Eski bolmeyle karsilastirma icin: cnn.BOLME_DOSYASI = "veri_bolme.csv"; cnn.DOSYA_EKI = ""
+BOLME_DOSYASI = "veri_bolme_v2.csv"
+# Uretilen rapor dosyalarinin adina eklenir (cnn_test_tahminleri_v2.csv gibi)
+DOSYA_EKI = "_v2"
 
 Girdi = Union[str, Path, np.ndarray]
 
@@ -232,6 +238,8 @@ def egit(
     tohum: int = 42,
     onegitimli: bool = True,
     ornek_sayisi: Optional[int] = None,
+    df: Optional[pd.DataFrame] = None,
+    rapor_yaz: bool = True,
 ) -> Dict:
     """
     EfficientNet-B0'i transfer learning ile egitir.
@@ -246,7 +254,8 @@ def egit(
     model_yolu = Path(model_yolu) if model_yolu else proje_koku / "models" / "model_efficientnet.pth"
     model_yolu.parent.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_csv(proje_koku / "data" / "splits" / "veri_bolme.csv")
+    if df is None:
+        df = pd.read_csv(proje_koku / "data" / "splits" / BOLME_DOSYASI)
     df_train, df_val = df[df["split"] == "train"], df[df["split"] == "val"]
     if ornek_sayisi:
         df_train = df_train.groupby("class_name").head(ornek_sayisi // len(SINIFLAR) + 1)
@@ -299,10 +308,11 @@ def egit(
                 print(f"[BILGI] Erken durdurma: {sabir} epoch boyunca val kaybi iyilesmedi.")
                 break
 
-    rapor = proje_koku / "reports"
-    (rapor / "figures").mkdir(parents=True, exist_ok=True)
-    (rapor / "cnn_egitim_gecmisi.json").write_text(json.dumps(gecmis, indent=2))
-    egitim_grafigi_ciz(gecmis, rapor / "figures" / "cnn_egitim_grafigi.png")
+    if rapor_yaz:
+        rapor = proje_koku / "reports"
+        (rapor / "figures").mkdir(parents=True, exist_ok=True)
+        (rapor / f"cnn_egitim_gecmisi{DOSYA_EKI}.json").write_text(json.dumps(gecmis, indent=2))
+        egitim_grafigi_ciz(gecmis, rapor / "figures" / f"cnn_egitim_grafigi{DOSYA_EKI}.png")
     _onbellek.clear()
     return gecmis
 
@@ -348,7 +358,7 @@ def model_yukle(yol: Optional[Union[str, Path]] = None,
         return _onbellek[anahtar]
     if not yol.exists():
         raise FileNotFoundError(
-            f"Model dosyasi yok: {yol}. Drive'daki models/model_efficientnet.pth "
+            f"Model dosyasi yok: {yol}. Ortak Drive'daki models/{yol.name} "
             "dosyasini bu konuma kopyalayin."
         )
     cihaz = torch.device(cihaz or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -434,7 +444,7 @@ def test_tahminlerini_kaydet(proje_koku: Path = PROJE_KOKU, veri_koku: Optional[
     proje_koku = Path(proje_koku)
     veri_koku = Path(veri_koku) if veri_koku else veri_kokunu_tahmin_et(proje_koku)
     model = model_yukle(model_yolu)
-    df = pd.read_csv(proje_koku / "data" / "splits" / "veri_bolme.csv")
+    df = pd.read_csv(proje_koku / "data" / "splits" / BOLME_DOSYASI)
     df = df[df["split"] == bolum].reset_index(drop=True)
 
     satirlar = []
@@ -447,7 +457,7 @@ def test_tahminlerini_kaydet(proje_koku: Path = PROJE_KOKU, veri_koku: Optional[
                          "dogru": tahmin_sinif == satir["class_name"],
                          **{f"p_{s}": round(v, 5) for s, v in p.items()}})
     sonuc = pd.DataFrame(satirlar)
-    cikti = proje_koku / "reports" / f"cnn_{bolum}_tahminleri.csv"
+    cikti = proje_koku / "reports" / f"cnn_{bolum}_tahminleri{DOSYA_EKI}.csv"
     cikti.parent.mkdir(parents=True, exist_ok=True)
     sonuc.to_csv(cikti, index=False)
     print(f"[BILGI] {bolum} dogrulugu: {sonuc['dogru'].mean():.3f} -> {cikti}")
@@ -495,12 +505,83 @@ def gradcam_figuru_uret(tahminler: pd.DataFrame, proje_koku: Path = PROJE_KOKU,
         eksenler[0, j].set_title(b, fontsize=11, fontweight="bold")
     fig.suptitle("RETINA-AI: Grad-CAM - modelin baktigi bolgeler", fontsize=14)
     fig.tight_layout()
-    cikti = proje_koku / "reports" / "figures" / "gradcam_ornekleri.png"
+    cikti = proje_koku / "reports" / "figures" / f"gradcam_ornekleri{DOSYA_EKI}.png"
     cikti.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(cikti, dpi=150)
     plt.close(fig)
     print(f"[BILGI] Grad-CAM figuru kaydedildi: {cikti}")
     return cikti
+
+
+# ============================================================
+# K-KATLI CAPRAZ DOGRULAMA (hasta bazli)
+# ============================================================
+
+def capraz_dogrulama(proje_koku: Path = PROJE_KOKU, veri_koku: Optional[Path] = None,
+                     k: int = 5, gecici_klasor: Path = Path("/tmp/retina_cv"),
+                     **egit_ayarlari) -> pd.DataFrame:
+    """
+    Bolme dosyasindaki TUM goruntuleri (train+val+test) hasta bazli k kata boler.
+    Kat i icin: test = kat i, val = kat i+1, train = kalan katlar.
+    Boylece her goruntu tam bir kez test edilir. Test seti kucuk oldugunda (sinif basina ~43)
+    tek bir bolmeden daha guvenilir bir ortalama ve standart sapma verir.
+
+    Cikti:
+      reports/cnn_capraz_dogrulama{EKI}.csv  -> kat x sinif dogrulugu
+      reports/cnn_capraz_tahminleri{EKI}.csv -> her goruntunun kat disi tahmini
+    """
+    from sklearn.model_selection import StratifiedGroupKFold
+
+    proje_koku = Path(proje_koku)
+    veri_koku = Path(veri_koku) if veri_koku else veri_kokunu_tahmin_et(proje_koku)
+    df = pd.read_csv(proje_koku / "data" / "splits" / BOLME_DOSYASI).reset_index(drop=True)
+    gruplar = df["hasta_anahtari"] if "hasta_anahtari" in df.columns else df["patient_id"].astype(str)
+
+    katlar = np.zeros(len(df), dtype=int)
+    skf = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=42)
+    for i, (_, idx) in enumerate(skf.split(df, df["class_name"], gruplar)):
+        katlar[idx] = i
+    gecici_klasor.mkdir(parents=True, exist_ok=True)
+
+    tum_tahminler, ozet = [], []
+    for i in range(k):
+        kume = np.where(katlar == i, "test", np.where(katlar == (i + 1) % k, "val", "train"))
+        df_kat = df.assign(split=kume)
+        print(f"\n========== KAT {i + 1}/{k} | "
+              f"train={int((kume == 'train').sum())} val={int((kume == 'val').sum())} "
+              f"test={int((kume == 'test').sum())} ==========")
+        model_yolu = gecici_klasor / f"kat{i + 1}.pth"
+        egit(proje_koku, veri_koku=veri_koku, model_yolu=model_yolu, df=df_kat,
+             rapor_yaz=False, **egit_ayarlari)
+
+        model = model_yukle(model_yolu)
+        test = df_kat[df_kat["split"] == "test"]
+        for _, satir in test.iterrows():
+            p = tahmin(dosya_yolunu_bul(satir, veri_koku), model)
+            t = max(p, key=p.get)
+            tum_tahminler.append({"kat": i + 1, "image_name": satir["image_name"],
+                                  "relative_path": satir["relative_path"],
+                                  "gercek": satir["class_name"], "tahmin": t,
+                                  "dogru": t == satir["class_name"],
+                                  **{f"p_{s}": round(v, 5) for s, v in p.items()}})
+        _onbellek.clear()
+
+        kat_df = pd.DataFrame([r for r in tum_tahminler if r["kat"] == i + 1])
+        satir_ozet = {"kat": i + 1, "genel": kat_df["dogru"].mean()}
+        satir_ozet.update(kat_df.groupby("gercek")["dogru"].mean().to_dict())
+        ozet.append(satir_ozet)
+        print(f"KAT {i + 1} test dogrulugu: {satir_ozet['genel']:.3f}")
+
+    ozet_df = pd.DataFrame(ozet).set_index("kat")
+    ozet_df.loc["ortalama"] = ozet_df.mean()
+    ozet_df.loc["std"] = ozet_df.iloc[:-1].std()
+    rapor = proje_koku / "reports"
+    rapor.mkdir(parents=True, exist_ok=True)
+    ozet_df.round(4).to_csv(rapor / f"cnn_capraz_dogrulama{DOSYA_EKI}.csv")
+    pd.DataFrame(tum_tahminler).to_csv(rapor / f"cnn_capraz_tahminleri{DOSYA_EKI}.csv", index=False)
+    print("\n[BILGI] Capraz dogrulama ozeti (dogruluk):")
+    print((ozet_df * 100).round(1))
+    return ozet_df
 
 
 # ============================================================
