@@ -288,7 +288,7 @@ def svm_tahmin(gorsel: np.ndarray) -> dict:
         from k3_oznitelik import k3_tahmin_et
     except ImportError:
         from src.k3_oznitelik import k3_tahmin_et
-    return k3_tahmin_et(gorsel)
+    return k3_tahmin_et(gorsel, bgr_mi=True)
 
 
 # ============================================================
@@ -446,7 +446,7 @@ def main():
             isi = isi_haritasi_bindir(renkli, gradcam(bgr, model=model))
             model_etiketi = f"CNN (EfficientNet-B0), {cnn_model_adi()}"
         else:
-            olasiliklar = svm_tahmin(renkli if renkli is not None else islenmis)
+            olasiliklar = svm_tahmin(bgr)
             isi = None
             model_etiketi = "SVM (RBF Kernel v2, %61.4 test doğruluğu)"
 
@@ -454,8 +454,8 @@ def main():
         sonuc_karti(olasiliklar, isi, "Grad-CAM: kırmızı bölgeler modelin en çok baktığı yerler", model_etiketi)
     else:
         sonuc_karti(olasiliklar, renkli, "Yüklenen fotoğraf", model_etiketi)
-        html_yaz('<div class="ra-kutu bilgi">SVM tahminleri şu an örnek (geçici) verilerdir. Kişi 3\'ün gerçek '
-                 "görüntülerle ve v2 ile eğitilmiş modeli gelince gerçek olacak.</div>")
+        html_yaz('<div class="ra-kutu bilgi">SVM fotoğrafın kendisine değil, ondan ölçülen 7 sayıya bakar '
+                 "(netlik, kontrast, damar oranı, sarı lezyon ve kanama ölçümleri). Bu yüzden Grad-CAM üretmez.</div>")
 
     disk_aciklama = (f"Çukur/disk oranı yaklaşık {disk['cukur_disk_orani']}." if disk is not None
                      else "Disk güvenilir şekilde bulunamadı.")
