@@ -254,52 +254,88 @@ def _sezgisel_olasilik_hesapla(oznitelikler: Dict[str, Union[float, int]]) -> Di
     return olasilik_sozluk
 
 
+_MODEL_CACHE = {}
+
+
+def _svm_modelini_yukle(model_dosyasi: Path):
+    """SVM Pipeline modelini yukler ve onbellekte saklar."""
+    dosya_str = str(model_dosyasi.resolve())
+    if dosya_str in _MODEL_CACHE:
+        return _MODEL_CACHE[dosya_str]
+
+    try:
+        import sklearn
+    except ImportError:
+        import sys
+        extra_path = r"C:\Users\samil\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\LocalCache\local-packages\Python312\site-packages"
+        if os.path.exists(extra_path) and extra_path not in sys.path:
+            sys.path.insert(0, extra_path)
+
+    import joblib
+    model = joblib.load(model_dosyasi)
+    _MODEL_CACHE[dosya_str] = model
+    return model
+
+
 def k3_tahmin_et(
     goruntu: Union[np.ndarray, str, Path],
-    model_path: str = "models/svm_model.pkl",
-    bgr_mi: bool = False
-) -> Dict[str, float]:
+    model_path: str = "models/svm_model_v2.pkl",
+    bgr_mi: bool = False,
+    as_json: bool = False
+) -> Union[Dict[str, float], str]:
     """
-    Fundus goruntusunden oznitelikleri cikarir ve SVM modelini kullanarak
-    4 sinifli hastalik olasiliklarini dondurur.
+    Fundus goruntusunden oznitelikleri cikarir ve v2 SVM Pipeline modelini (StandardScaler + SVC)
+    kullanarak 4 sinifli hastalik olasiliklarini dondurur.
 
     Parametreler:
         goruntu (np.ndarray | str | Path): 512x512 RGB/BGR goruntu matrisi veya dosya yolu.
-        model_path (str): Egitilmis SVM model dosyasinin (.pkl) konumu.
+        model_path (str): Egitilmis v2 SVM model dosyasinin (.pkl) konumu.
         bgr_mi (bool): Girdi goruntusu BGR formatindaysa True verilir.
+        as_json (bool): True verilirse dogrudan JSON dizgisi (string) dondurur.
 
     Dondurur:
-        dict: Tam olarak su formatta olasiliklar:
+        dict veya str: JSON uyumlu standart Python float sozluk veya JSON string:
             {"normal": 0.10, "diabetic_retinopathy": 0.70, "glaucoma": 0.15, "cataract": 0.05}
     """
+    import json
+
     oznitelikler = oznitelik_cikar(goruntu, bgr_mi=bgr_mi)
     
-    # 7 oznitelikli tam vektor
+    # data/oznitelikler_v2.csv siralamasina tam uygun 7 oznitelikli vektor
     vektor_7 = [
-        oznitelikler["laplacian_varyansi"],
-        oznitelikler["ortalama_kontrast"],
-        oznitelikler["damar_orani"],
-        oznitelikler["sari_lezyon_alani"],
-        oznitelikler["sari_lezyon_sayisi"],
-        oznitelikler["kanama_alani"],
-        oznitelikler["kanama_sayisi"]
+        float(oznitelikler["laplacian_varyansi"]),
+        float(oznitelikler["ortalama_kontrast"]),
+        float(oznitelikler["damar_orani"]),
+        float(oznitelikler["sari_lezyon_alani"]),
+        float(oznitelikler["sari_lezyon_sayisi"]),
+        float(oznitelikler["kanama_alani"]),
+        float(oznitelikler["kanama_sayisi"])
     ]
     # Geriye donuk 6 oznitelikli model uyumlulugu
     vektor_6 = [
-        oznitelikler["laplacian_varyansi"],
-        oznitelikler["ortalama_kontrast"],
-        oznitelikler["sari_lezyon_alani"],
-        oznitelikler["sari_lezyon_sayisi"],
-        oznitelikler["kanama_alani"],
-        oznitelikler["kanama_sayisi"]
+        float(oznitelikler["laplacian_varyansi"]),
+        float(oznitelikler["ortalama_kontrast"]),
+        float(oznitelikler["sari_lezyon_alani"]),
+        float(oznitelikler["sari_lezyon_sayisi"]),
+        float(oznitelikler["kanama_alani"]),
+        float(oznitelikler["kanama_sayisi"])
     ]
 
     model_dosyasi = Path(model_path)
+    if not model_dosyasi.exists():
+        for aday in [
+            Path("models/svm_model_v2.pkl"),
+            Path("models/svm_model.pkl"),
+            Path(__file__).resolve().parent.parent / "models" / "svm_model_v2.pkl",
+            Path(__file__).resolve().parent.parent / "models" / "svm_model.pkl"
+        ]:
+            if aday.exists():
+                model_dosyasi = aday
+                break
 
     if model_dosyasi.exists():
         try:
-            import joblib
-            model = joblib.load(model_dosyasi)
+            model = _svm_modelini_yukle(model_dosyasi)
             
             beklenen_oznitelik_sayisi = getattr(model, "n_features_in_", None)
             if beklenen_oznitelik_sayisi == 6:
@@ -327,11 +363,17 @@ def k3_tahmin_et(
                     en_buyuk = max(sonuc, key=sonuc.get)
                     sonuc[en_buyuk] = round(sonuc[en_buyuk] + fark, 2)
                     
-                return {s: float(sonuc[s]) for s in SINIFLAR}
+                nihai_sonuc = {s: float(sonuc[s]) for s in SINIFLAR}
+                if as_json:
+                    return json.dumps(nihai_sonuc, ensure_ascii=False)
+                return nihai_sonuc
         except Exception:
             pass
 
-    return _sezgisel_olasilik_hesapla(oznitelikler)
+    sezgisel = _sezgisel_olasilik_hesapla(oznitelikler)
+    if as_json:
+        return json.dumps(sezgisel, ensure_ascii=False)
+    return sezgisel
 
 
 if __name__ == "__main__":
