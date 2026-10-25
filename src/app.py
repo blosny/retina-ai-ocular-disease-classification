@@ -10,8 +10,7 @@ Gercek kod:
     CNN tahmin+Grad-CAM -> Kisi 4 (src/cnn_models.py)
                           Model dosyasi: models/model_efficientnet_v2.pth (ortak Drive'dan indirilir)
                           Eski v1 modeli (model_efficientnet.pth) sizinti icerdigi icin kullanilmaz.
-Gecici dublorler:
-    svm_tahmin         -> Kisi 3 (gercek goruntulerle ve v2 bolmesiyle egitilmis SVM gelince degisecek)
+    SVM tahmin         -> Kisi 3 (src/k3_oznitelik.py, v2 SVM Pipeline)
 
 Gorunum:
     Tasarim (renkler, yazi tipi, masaustu/telefon yerlesimi) asagidaki STIL blogunda.
@@ -279,11 +278,17 @@ def cnn_model_adi() -> str:
 # GECICI DUBLORLER - sahipleri bitirince degistir
 # ============================================================
 
-def svm_tahmin(islenmis: np.ndarray) -> dict:
-    """KISI 3 (SVM) - GECICI: ayni goruntu icin hep ayni, rastgele sayilar."""
-    tohum = int((islenmis * 1000).astype(np.int64).sum() % (2**32))
-    olasiliklar = np.random.default_rng(tohum).dirichlet(np.ones(len(SINIFLAR)) * 0.6)
-    return {sinif: float(p) for sinif, p in zip(SINIFLAR, olasiliklar)}
+def svm_tahmin(gorsel: np.ndarray) -> dict:
+    """
+    KISI 3 (SVM) - Gercek v2 SVM Pipeline modeli ile tahmin.
+    Gorselden medikal oznitelikleri cikarir ve egitilmis SVM modeli uzerinden
+    sinif olasiliklarini dondurur.
+    """
+    try:
+        from k3_oznitelik import k3_tahmin_et
+    except ImportError:
+        from src.k3_oznitelik import k3_tahmin_et
+    return k3_tahmin_et(gorsel)
 
 
 # ============================================================
@@ -388,7 +393,7 @@ def kenar_cubugu():
                     "(sınıf başına 288 görüntü) ile eğitildi.")
         st.markdown("### Modeller")
         st.markdown("- **CNN:** EfficientNet-B0, fotoğrafa doğrudan bakar. Test doğruluğu %80.7.\n"
-                    "- **SVM:** Damar, lezyon ve netlik ölçümlerine bakar.")
+                    "- **SVM:** Damar, lezyon ve netlik ölçümlerine bakar. Test doğruluğu %61.4.")
         st.markdown("### Sınırlılıklar")
         st.markdown("Glokom ve normal en çok karışan sınıflar. Karanlık veya bulanık fotoğraflar katarakt "
                     "sanılabilir. Eğitim verisine benzemeyen fotoğraflarda sonuç güvenilir değildir.")
@@ -441,9 +446,9 @@ def main():
             isi = isi_haritasi_bindir(renkli, gradcam(bgr, model=model))
             model_etiketi = f"CNN (EfficientNet-B0), {cnn_model_adi()}"
         else:
-            olasiliklar = svm_tahmin(islenmis)
+            olasiliklar = svm_tahmin(renkli if renkli is not None else islenmis)
             isi = None
-            model_etiketi = "SVM (geçici örnek veri)"
+            model_etiketi = "SVM (RBF Kernel v2, %61.4 test doğruluğu)"
 
     if isi is not None:
         sonuc_karti(olasiliklar, isi, "Grad-CAM: kırmızı bölgeler modelin en çok baktığı yerler", model_etiketi)

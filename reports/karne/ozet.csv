@@ -1,3 +1,4 @@
 ,goruntu,dogruluk,makro_precision,makro_recall,makro_f1,makro_auc
 CNN v2,171.0,0.807,0.8086,0.8077,0.806,0.9412
+SVM v2,171.0,0.614,0.6097,0.6156,0.5945,0.8257
 CNN v1 (geçersiz),604.0,0.9123,0.9122,0.9123,0.9113,0.9841

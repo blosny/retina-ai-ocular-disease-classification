@@ -1,0 +1,5 @@
+sinif,goruntu,precision,recall (dogruluk),f1,auc
+Normal,43,0.6364,0.3256,0.4308,0.7075
+Diyabetik retinopati,43,0.6538,0.7907,0.7158,0.9126
+Glokom,43,0.4878,0.4651,0.4762,0.756
+Katarakt,42,0.6607,0.881,0.7551,0.9265
