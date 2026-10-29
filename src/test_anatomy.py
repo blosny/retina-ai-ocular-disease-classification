@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from anatomy import damar_haritasi, damar_yogunlugu, disk_isaretle, optik_disk  # noqa: E402
+from anatomy import _gri_uint8, _retina_alani, damar_haritasi, damar_yogunlugu, disk_isaretle, optik_disk  # noqa: E402
 from preprocessing import on_isle  # noqa: E402
 
 KOK = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -117,6 +117,28 @@ def test_disk_isaretle_none_ve_cizim():
     im = _yukle("normal/2329_left.jpg")
     assert np.array_equal(disk_isaretle(im, None), im)
     assert not np.array_equal(disk_isaretle(im, optik_disk(im)), im)
+
+
+def test_yazi_damar_sanilmaz():
+    # diabetic_retinopathy/10010_left: üstte veri setinden gelen "...RETINOPATHY" yazısı var.
+    # Harfler damar haritasına girmemeli (üstte yatay ve basık parça kalmamalı).
+    maske = damar_haritasi(on_isle(_yukle("diabetic_retinopathy/10010_left.jpeg")))
+    n, _, ist, _ = cv2.connectedComponentsWithStats(maske)
+    yazi = [tuple(ist[i][:4]) for i in range(1, n)
+            if ist[i][cv2.CC_STAT_TOP] < 70 and ist[i][cv2.CC_STAT_HEIGHT] < 25]
+    assert not yazi, f"Yazı damar sanılmış: {yazi}"
+
+
+def test_retina_kenari_damar_sanilmaz():
+    # Retina dairesinin kenar çizgisi damar haritasında yay olarak çıkmamalı.
+    for dosya in ("diabetic_retinopathy/10013_left.jpeg", "diabetic_retinopathy/10013_right.jpeg",
+                  "glaucoma/1212_right.jpg", "cataract/1115_left.jpg"):
+        g = on_isle(_yukle(dosya))
+        maske = damar_haritasi(g)
+        gri = _gri_uint8(g)
+        serit = (_retina_alani(gri) > 0) & ~(_retina_alani(gri, kenar_payi=22) > 0)
+        oran = ((maske > 0) & serit).sum() / max((maske > 0).sum(), 1)
+        assert oran < 0.07, f"{dosya}: damarların %{oran * 100:.0f}'i retina kenarında"
 
 
 if __name__ == "__main__":

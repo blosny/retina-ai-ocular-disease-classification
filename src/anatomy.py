@@ -17,6 +17,10 @@ def _gri_uint8(goruntu):
 def _retina_alani(gri, kenar_payi=10):
     """Retinanın olduğu yuvarlak bölgeyi bulur (siyah kenarlar dışarıda kalır)."""
     ikili = (gri > 5).astype(np.uint8) * 255
+    # Önce açma: fotoğraf üstündeki yazı/etiket gibi ince yapıları sil. Yoksa kapama
+    # işlemi yazıyı retina dairesine yapıştırıyor ve harfler damar sanılıyor.
+    ikili = cv2.morphologyEx(ikili, cv2.MORPH_OPEN,
+                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21)))
     ikili = cv2.morphologyEx(ikili, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
     konturlar, _ = cv2.findContours(ikili, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not konturlar:
@@ -26,6 +30,9 @@ def _retina_alani(gri, kenar_payi=10):
     # Kenardan içeri çek. Görüntü sınırının dışı da "boş" sayılır (kenar kıymıklarını önler)
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * kenar_payi + 1,) * 2)
     return cv2.erode(alan, k, borderType=cv2.BORDER_CONSTANT, borderValue=0)
+
+
+KENAR_SERIT = 12            # retina kenarından bu kadar piksellik şerit "kenar" sayılır
 
 
 def damar_haritasi(goruntu, kernel_boyutu=15, min_alan=20, min_uzunluk=15):
@@ -50,6 +57,11 @@ def damar_haritasi(goruntu, kernel_boyutu=15, min_alan=20, min_uzunluk=15):
                             cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     esik = max(esik, 12)   # zayıf kontrastlı (bulanık) görüntülerde gürültüyü damar sayma
     maske = ((tophat > esik) & ic).astype(np.uint8) * 255
+
+    # Retinanın kenarındaki şerit: kenar çizgisinin koyu geçişi blackhat'te damar gibi
+    # çıkar (kenar boyunca uzanan yay). Bu şeridi damar aramasından çıkar.
+    kenar_serit = ic & ~(_retina_alani(gri, kenar_payi=10 + KENAR_SERIT) > 0)
+    maske[kenar_serit] = 0
 
     # Parçaları ele: küçükleri, kısa olanları ve yuvarlak leke gibi duranları sil.
     # Damarlar uzun ve ince, lekeler (kanama vb.) kısa ve dolgundur.

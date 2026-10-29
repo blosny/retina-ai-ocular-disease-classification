@@ -74,3 +74,45 @@
 - 256x256 ve çok büyük görüntüler yalnızca cataract ve glaucoma sınıflarında var. Bir model hastalık yerine çözünürlüğe bakarak bu iki grubu diğer ikisinden ayırabilir. Katarakttaki düşük damar yoğunluğunun sebebi (bulanıklık mı, düşük çözünürlük mü) bu testle ayrılamadı.
 
 **Ekip için not:** CNN'in en çok karıştırdığı sınıf çifti glokom ve normal. Çukur/disk oranı bu ikisini ayırması beklenen klinik bir özellik, ama bizim oranımız güvenilirliği ölçülmemiş yaklaşık bir değer. Makale tartışmasında bir yön olarak ele alınabilir, bir sonuç olarak değil.
+---
+
+## v2 Güncellemesi
+
+Ekip veri sızıntısı yüzünden `veri_bolme_v2.csv` bölmesine geçtikten sonra anatomi kodunu ve testlerini v2'ye göre güncelledim. Fonksiyon adları ve döndürdükleri değerler değişmedi, arayüzde ek bir değişiklik gerekmedi.
+
+### Ne değişti
+**Optik disk (`optik_disk`):**
+1. **Aday arama:** Disk artık "en parlak nokta" olarak değil, **yerel kontrasta** göre aranıyor (küçük ölçekli bulanıklık eksi büyük ölçekli bulanıklık). Doygun turuncu disk gri tonda en parlak olmasa da çevresinden belirgin ayrılıyor. Geniş ve yumuşak parlamalar geride kalıyor.
+2. **Çoklu aday:** En iyi 5 aday sırayla deneniyor, kontrolleri ilk geçen aday seçiliyor.
+3. **Kenar payı:** Retina kenarından içeri çekme payı 25 pikselden 3 piksele indi. Kenara yakın diskler artık bulunuyor.
+4. **Kenara değen disk:** Yuvarlaklık eşiği gevşetildi (0,55 ve üstü, kontrast 35 ve üstü).
+5. **Büyük aday kontrolü:** Yarıçapı 55 pikselden büyük adaylar daha yuvarlak olmak zorunda (en az 0,88). Böylece parlamalar eleniyor, büyük gerçek diskler kaybedilmiyor.
+6. **Ölçek:** 512x512 dışındaki görüntüler içeride 512'ye ölçekleniyor, sonuç orijinal boyuta geri çevriliyor.
+7. **Hata ayıklama:** `optik_disk(..., ayrinti=True)` verilince hangi kontrolün takıldığı ekrana yazılıyor. Varsayılan `False`.
+
+**Damar haritası (`damar_haritasi`):**
+1. Parça filtresi `min_alan=20`, `min_uzunluk=15` olarak gevşetildi. İnce damarlar daha iyi korunuyor.
+2. **Yazı düzeltmesi:** Bazı fotoğrafların üstündeki veri seti yazısı (örn. "...RETINOPATHY") retina alanına yapışıp damar sanılıyordu. Retina alanı bulunurken kapamadan önce 21x21 açma işlemi eklendi. Yazı artık alanın dışında kalıyor.
+3. **Kenar düzeltmesi:** Retina dairesinin kenar çizgisi damar haritasında yay olarak çıkıyordu. Kenardaki 12 piksellik şerit damar aramasından çıkarıldı. Gerçek damarların sadece kenara değen uç kısmı kesiliyor.
+
+**Test:**
+- `src/anatomi_testi.py`: v2 test kümesinden her sınıftan 5 görüntü (random_state=42) seçip `reports/anatomi_sonuclari_v2.csv` ve `reports/figures/anatomi_ornekleri_v2.png` üretiyor. Görüntü klasörü `--goruntu_dizin` ile veriliyor.
+- `src/test_anatomy.py`: 14 otomatik test. Dönüş biçimi, disk bulma oranı, parlamanın disk sanılmaması, kenara yakın disk, boyut bağımsızlığı, boş ve hatalı girdiler, yazının ve retina kenarının damar sanılmaması.
+
+### Önce / sonra
+| Ölçüm | Önce | Sonra |
+|---|---|---|
+| Disk bulma (repodaki 16 test fotoğrafı) | 10/16 | **15/16**, hepsi doğru yerde |
+| v2 testi (20 görüntü) disk bulma | - | normal 5/5, DR 5/5, glokom 5/5, katarakt 0/5 (toplam %75) |
+| Yazının damar sanılması (10010_left) | 6 parça, yaklaşık 2.700 piksel | 0 |
+| Damarların retina kenarı şeridinde kalan oranı | 16 fotoğrafın 9'unda %10-30 | %0 (şerit aramadan çıkarıldı) |
+
+Yazı ve kenar düzeltmesi optik disk sonuçlarını değiştirmedi (16 fotoğrafta disk konumları birebir aynı). Damar yoğunlukları, kenar ve yazı pikselleri çıktığı için biraz düştü (örn. 10013_left 0,092'den 0,080'e).
+
+### Sınırlılıklar
+- **Katarakt:** Fotoğraflar bulanık olduğu için disk ve damarlar bulunamıyor (v2 testinde 0/5). Kod bu durumda yanlış yer göstermek yerine "bulunamadı" diyor.
+- **Çukur/disk oranı (CDR) glokomu ayırt etmiyor.** v2 testinde ortalama CDR normal 0,53, DR 0,48, glokom 0,48. Sınıf içi dağılım geniş (normal 0,35-0,75, glokom 0,33-0,57). Glokomda daha yüksek çıkması gerekirdi. Disk doğru bulunuyor ama çukur, parlaklık eşiğiyle güvenilir ölçülemiyor. Bu yüzden CDR SVM'ye özellik olarak **eklenmedi**.
+- **Bulanık fotoğrafta gürültü:** `cataract/2133_right.jpg`'de damar haritasında benek kümeleri çıkıyor (yoğunluk 0,031). Şekle dayalı bir filtre denendi ama gerçek damar dallarını da sildiği için kullanılmadı.
+- **Karanlık fotoğraf:** `glaucoma/1405_left.jpg` gibi çok karanlık fotoğraflarda damarların çoğu yakalanamıyor (yoğunluk 0,004).
+- **İnce kılcal damarlar:** Haritada çoğunlukla ana damarlar ve kalın dallar var.
+- Eşikler büyük ölçüde test fotoğraflarına bakılarak ayarlandı. Bu yüzden test sonuçları tamamen bağımsız bir doğrulama sayılmamalı.
