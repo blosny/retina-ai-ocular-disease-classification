@@ -180,6 +180,17 @@ div[data-testid="stButtonGroup"] button:focus-visible { outline: 3px solid #7CC3
 .ra-resim img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .ra-bos { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; text-align: center;
   padding: 16px; color: #C9D2DA; font-size: 0.88rem; line-height: 1.45; background: #1D2733; }
+.ra-resim img.ra-soluk { opacity: 0.55; filter: grayscale(0.5); }
+.ra-etiket { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 10px; text-align: center; }
+.ra-etiket b { background: rgba(22, 38, 61, 0.88); color: #FFFFFF; font-size: 0.8rem; font-weight: 700; line-height: 1.3;
+  padding: 6px 10px; border-radius: 8px; }
+.ra-olcum-kap { position: absolute; inset: 0; background: #1D2733; container-type: size; }
+.ra-olcum { list-style: none; margin: 0; height: 100%; box-sizing: border-box;
+  padding: 24cqh 9cqw 5cqh; display: flex; flex-direction: column; justify-content: space-between; }
+.ra-olcum li { display: flex; justify-content: space-between; gap: 4cqw; font-size: 7.4cqh; line-height: 1.2; color: #C9D2DA;
+  margin: 0 !important; padding: 0 !important; }
+.ra-olcum li span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ra-olcum li b { color: #FFFFFF; font-weight: 700; font-variant-numeric: tabular-nums; }
 .ra-no { position: absolute; top: 8px; left: 8px; width: 26px; height: 26px; border-radius: 50%; background: rgba(255,255,255,0.92);
   color: var(--murekkep); font-weight: 800; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; }
 .ra-adim figcaption { margin-top: 10px; }
@@ -356,17 +367,47 @@ def sonuc_karti(olasiliklar: dict, gorsel: np.ndarray, gorsel_aciklama: str, mod
 
 
 def adimlar_karti(adimlar: list):
-    """adimlar: [(baslik, aciklama, goruntu veya None, bos_mesaj)]"""
+    """adimlar: [(baslik, aciklama, goruntu veya None, bos_mesaj)]
+    bos_mesaj yerine ("html", "<...>") verilirse kutuya hazır HTML yazılır (SVM ölçümleri için)."""
     hucreler = ""
     for i, (baslik, aciklama, goruntu, bos) in enumerate(adimlar, start=1):
-        icerik = (f'<img src="{resim_veri(goruntu)}" alt="{html.escape(baslik)}">' if goruntu is not None
-                  else f'<div class="ra-bos">{html.escape(bos)}</div>')
+        if goruntu is not None:
+            icerik = f'<img src="{resim_veri(goruntu)}" alt="{html.escape(baslik)}">'
+        elif isinstance(bos, tuple) and bos[0] == "html":
+            icerik = bos[1]
+        else:
+            icerik = f'<div class="ra-bos">{html.escape(bos)}</div>'
         hucreler += (f'<div class="ra-adim"><figure><div class="ra-resim">{icerik}<span class="ra-no">{i}</span></div>'
                      f"<figcaption><b>{html.escape(baslik)}</b><span>{html.escape(aciklama)}</span></figcaption>"
                      "</figure></div>")
     html_yaz(f"""<div class="ra-kart"><h2>Görüntü işleme adımları</h2>
         <p class="ra-not">Fotoğrafın sisteme girdikten sonra geçtiği aşamalar.</p>
         <div class="ra-adimlar">{hucreler}</div></div>""")
+
+
+SVM_OLCUMLERI = [  # (anahtar, arayuzde gorunen ad, ondalik basamak)
+    ("laplacian_varyansi", "Netlik", 0),
+    ("ortalama_kontrast", "Kontrast", 1),
+    ("damar_orani", "Damar skoru", 3),
+    ("sari_lezyon_sayisi", "Sarı leke", 0),
+    ("sari_lezyon_alani", "Leke alanı", 0),
+    ("kanama_sayisi", "Kanama", 0),
+    ("kanama_alani", "Kanama alanı", 0),
+]
+
+
+def svm_olcum_kutusu(oz: dict) -> str:
+    """SVM'nin kararını verirken baktığı 7 ölçümü küçük bir liste olarak döndürür."""
+    satirlar = "".join(
+        f"<li><span>{ad}</span><b>{oz[anahtar]:.{basamak}f}</b></li>"
+        for anahtar, ad, basamak in SVM_OLCUMLERI if anahtar in oz)
+    return f'<div class="ra-olcum-kap"><ul class="ra-olcum">{satirlar}</ul></div>'
+
+
+def soluk_kutu(goruntu: np.ndarray, mesaj: str) -> str:
+    """Bulunamayan adımlar için: fotoğrafı soluk gösterip üstüne kısa bir etiket koyar."""
+    return (f'<img class="ra-soluk" src="{resim_veri(goruntu)}" alt="">'
+            f'<div class="ra-etiket"><b>{html.escape(mesaj)}</b></div>')
 
 
 def bos_durum():
@@ -448,6 +489,11 @@ def main():
         else:
             olasiliklar = svm_tahmin(bgr)
             isi = None
+            try:
+                from k3_oznitelik import oznitelik_cikar
+            except ImportError:
+                from src.k3_oznitelik import oznitelik_cikar
+            svm_olcumleri = oznitelik_cikar(bgr, bgr_mi=True)  # SVM'e giden 7 sayi (egitimdekiyle ayni girdi)
             model_etiketi = "SVM (RBF Kernel v2, %61.4 test doğruluğu)"
 
     if isi is not None:
@@ -455,18 +501,20 @@ def main():
     else:
         sonuc_karti(olasiliklar, renkli, "Yüklenen fotoğraf", model_etiketi)
         html_yaz('<div class="ra-kutu bilgi">SVM fotoğrafın kendisine değil, ondan ölçülen 7 sayıya bakar '
-                 "(netlik, kontrast, damar oranı, sarı lezyon ve kanama ölçümleri). Bu yüzden Grad-CAM üretmez.</div>")
+                 "(netlik, kontrast, damar oranı, sarı leke ve kanama ölçümleri). Bu sayılar aşağıdaki 5. kutuda görünür; SVM Grad-CAM üretmez.</div>")
 
     disk_aciklama = (f"Çukur/disk oranı yaklaşık {disk['cukur_disk_orani']}." if disk is not None
-                     else "Disk güvenilir şekilde bulunamadı.")
+                     else "Fotoğraf bulanık ya da karanlık; sistem yanlış yer göstermek yerine aramayı bıraktı.")
     adimlar_karti([
         ("Kırpılmış retina", "Siyah kenarlar kesildi, 512×512'ye getirildi.", renkli, ""),
         ("Ön işleme", "Yeşil kanal ve CLAHE ile damarlar belirginleşti.", islenmis, ""),
         ("Damar haritası", f"Damarların retina alanına oranı {yogunluk:.3f}.", damarlar, ""),
         ("Optik disk", disk_aciklama, disk_gorsel if disk is not None else None,
-         "Disk bulunamadı. Fotoğraf bulanık, karanlık ya da disk kenara çok yakın olabilir."),
+         ("html", soluk_kutu(renkli, "Disk bulunamadı"))),
         ("Grad-CAM", "Modelin karar verirken en çok baktığı bölgeler kırmızı.", isi,
-         "Grad-CAM yalnızca CNN modelinde gösterilir."),
+         "Grad-CAM yalnızca CNN modelinde gösterilir.") if cnn_secili else
+        ("SVM ölçümleri", "SVM fotoğrafa değil, bu 7 sayıya bakarak karar verdi.", None,
+         ("html", svm_olcum_kutusu(svm_olcumleri))),
     ])
 
     html_yaz('<div class="ra-kutu uyari">Bu sonuç yalnızca akademik simülasyon amaçlıdır ve tıbbi teşhis yerine '
