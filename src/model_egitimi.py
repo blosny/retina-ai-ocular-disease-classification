@@ -9,12 +9,19 @@ Bu modul, `data/oznitelikler_v2.csv` dosyasindaki gercek medikal retina ozniteli
 4. Val (dogrulama) kumesinde basarimi olcer. Sonucun yapay %100 degil, gercekci tibbi
    veri araliginda (%60-%85 bandinda) cikip cikmadigini denetler.
 5. Random Forest modelini egitir ve guncel oznitelik onem grafigini olusturur.
-6. Egitilen guncel SVM Pipeline modelini `models/svm_model_v2.pkl` olarak kaydeder.
+6. Random Forest test tahminlerini (`reports/rf_test_tahminleri_v2.csv`) ve test sonuclarini (`reports/rf_test_sonuclari.csv`) kaydeder.
+7. Egitilen guncel SVM ve RF modellerini `models/` altina kaydeder.
 """
 
 from pathlib import Path
+from typing import Optional, Tuple
 import os
 import sys
+
+# Windows site-packages fallback (WindowsApps ortami icin)
+extra_site = r"C:\Users\samil\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\LocalCache\local-packages\Python312\site-packages"
+if os.path.exists(extra_site) and extra_site not in sys.path:
+    sys.path.insert(0, extra_site)
 
 # Windows konsol UTF-8 uyumlulugu
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -171,7 +178,10 @@ def dogrulama_ve_test_degerlendir(scaler, svm_model, rf_model, X_val, y_val, X_t
     print("\n--- SVM Dogrulama (Val) Kumesi Detayli Raporu ---")
     print(classification_report(y_val, val_preds, digits=3))
 
-    return val_acc, test_acc
+    print("\n--- Random Forest Test Kumesi Detayli Raporu ---")
+    print(classification_report(y_test, rf_test_preds, digits=3))
+
+    return val_acc, val_f1, test_acc, test_f1, rf_acc, rf_f1
 
 
 def oznitelik_onem_grafigi_ciz(rf_model, cikti_yolu: Path):
@@ -218,9 +228,10 @@ def oznitelik_onem_grafigi_ciz(rf_model, cikti_yolu: Path):
 
 
 def test_tahminlerini_kaydet(
-    svm_pipeline,
+    model,
+    model_adi: str = "SVM",
     csv_yolu: Path = PROJE_KOKU / "data" / "oznitelikler_v2.csv",
-    cikti_yolu: Path = PROJE_KOKU / "reports" / "svm_test_tahminleri_v2.csv",
+    cikti_yolu: Optional[Path] = None,
     bolum: str = "test"
 ) -> pd.DataFrame:
     """
@@ -228,16 +239,19 @@ def test_tahminlerini_kaydet(
     Kisi 4'un urettigi test raporu dosyasi (reports/cnn_test_tahminleri_v2.csv) ile
     birebir uyumlu sutun yapisinda kaydeder.
     """
-    print(f"[5/6] {bolum.capitalize()} kumesi tahmin raporu uretiliyor: {cikti_yolu.name}...")
+    if cikti_yolu is None:
+        cikti_yolu = PROJE_KOKU / "reports" / f"{model_adi.lower().strip()}_test_tahminleri_v2.csv"
+
+    print(f"[*] {model_adi.upper()} {bolum.capitalize()} kumesi tahmin raporu uretiliyor: {cikti_yolu.name}...")
     df_tum = pd.read_csv(csv_yolu)
     df_bolum = df_tum[df_tum["split"] == bolum].reset_index(drop=True)
 
     X_bolum = df_bolum[OZNITELIK_KOLONLARI].values
     y_bolum = df_bolum["class_name"].values
 
-    preds = svm_pipeline.predict(X_bolum)
-    probas = svm_pipeline.predict_proba(X_bolum)
-    classes = list(svm_pipeline.classes_)
+    preds = model.predict(X_bolum)
+    probas = model.predict_proba(X_bolum)
+    classes = list(model.classes_)
 
     satirlar = []
     for i in range(len(df_bolum)):
@@ -266,19 +280,99 @@ def test_tahminlerini_kaydet(
     return df_sonuc
 
 
-def modeli_kaydet(svm_pipeline, model_yolu: Path):
+def rf_test_sonuclarini_kaydet(
+    rf_model,
+    X_test,
+    y_test,
+    val_acc: float,
+    val_f1: float,
+    test_acc: float,
+    test_f1: float,
+    rf_acc: float,
+    rf_f1: float,
+    cikti_dizini: Path = PROJE_KOKU / "reports"
+):
     """
-    Nihai SVM modelini `models/svm_model_v2.pkl` olarak kaydeder.
+    Random Forest test sonuclarini (ekrana basilan metrikler ve detayli siniflandirma raporu)
+    reports/ altina hem CSV hem de TXT formatinda kaydeder.
+    Makalede SVM'in yanina eklenmek uzere hazirlanir.
     """
-    print(f"[5/5] Egitilmis SVM Pipeline modeli kaydediliyor: {model_yolu.name}...")
+    cikti_dizini.mkdir(parents=True, exist_ok=True)
+    print(f"[6/7] Random Forest test sonuclari kaydediliyor: {cikti_dizini.name}...")
+
+    # 1. Model Performans Tablosu CSV (Ekranda basilan karsilastirma tablosu)
+    tablo_df = pd.DataFrame([
+        {"kume_model": "Validation (Val) - SVM", "accuracy": round(val_acc * 100, 2), "macro_f1": round(val_f1, 4)},
+        {"kume_model": "Test - SVM", "accuracy": round(test_acc * 100, 2), "macro_f1": round(test_f1, 4)},
+        {"kume_model": "Random Forest (Test)", "accuracy": round(rf_acc * 100, 2), "macro_f1": round(rf_f1, 4)}
+    ])
+    tablo_yolu = cikti_dizini / "model_performans_tablosu.csv"
+    tablo_df.to_csv(tablo_yolu, index=False)
+    print(f"      [OK] Model performans tablosu kaydedildi: {tablo_yolu}")
+
+    # 2. Random Forest Detayli Test Sonuclari CSV
+    rf_preds = rf_model.predict(X_test)
+    rapor_dict = classification_report(y_test, rf_preds, digits=4, output_dict=True)
+
+    satirlar = []
+    for etiket, degerler in rapor_dict.items():
+        if isinstance(degerler, dict):
+            satirlar.append({
+                "sinif": etiket,
+                "precision": round(degerler["precision"], 4),
+                "recall": round(degerler["recall"], 4),
+                "f1_score": round(degerler["f1-score"], 4),
+                "support": int(degerler["support"])
+            })
+        else:
+            satirlar.append({
+                "sinif": "accuracy",
+                "precision": round(degerler, 4),
+                "recall": round(degerler, 4),
+                "f1_score": round(degerler, 4),
+                "support": len(y_test)
+            })
+
+    rf_df = pd.DataFrame(satirlar)
+    rf_csv_yolu = cikti_dizini / "rf_test_sonuclari.csv"
+    rf_df.to_csv(rf_csv_yolu, index=False)
+    print(f"      [OK] RF test sonuclari CSV kaydedildi: {rf_csv_yolu}")
+
+    # 3. Metin Formatinda Ozet Rapor (Makale icin hazir metin)
+    metin_yolu = cikti_dizini / "rf_test_sonuclari.txt"
+    with open(metin_yolu, "w", encoding="utf-8") as f:
+        f.write("=" * 70 + "\n")
+        f.write("       RETINA-AI: RANDOM FOREST VE SVM TEST PERFORMANS RAPORU (v2)\n")
+        f.write("=" * 70 + "\n\n")
+        f.write("Kume / Model         | Accuracy (%) | Macro F1\n")
+        f.write("-" * 50 + "\n")
+        f.write(f"Validation (SVM)     | %{val_acc * 100:<10.2f} | {val_f1:.4f}\n")
+        f.write(f"Test (SVM)           | %{test_acc * 100:<10.2f} | {test_f1:.4f}\n")
+        f.write(f"Random Forest (Test) | %{rf_acc * 100:<10.2f} | {rf_f1:.4f}\n")
+        f.write("=" * 70 + "\n\n")
+        f.write("--- Random Forest Test Kumesi Siniflandirma Raporu ---\n")
+        f.write(classification_report(y_test, rf_preds, digits=4))
+    print(f"      [OK] RF test ozet metni kaydedildi: {metin_yolu}\n")
+
+
+def modeli_kaydet(svm_pipeline, rf_model, model_yolu: Path):
+    """
+    Nihai SVM modelini `models/svm_model_v2.pkl` ve RF modelini `models/rf_model_v2.pkl` olarak kaydeder.
+    """
+    print(f"[7/7] Egitilmis modeller kaydediliyor...")
     model_yolu.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(svm_pipeline, model_yolu)
-    print(f"      [OK] Model basariyla kaydedildi: {model_yolu}")
+    print(f"      [OK] SVM Modeli basariyla kaydedildi: {model_yolu}")
 
     # Geriye donuk uyumluluk icin svm_model.pkl olarak da kopyala
     yedek_yol = model_yolu.parent / "svm_model.pkl"
     joblib.dump(svm_pipeline, yedek_yol)
-    print(f"      [OK] Arayuz uyumlulugu icin yedeklendi: {yedek_yol}\n")
+    print(f"      [OK] SVM arayuz uyumlulugu icin yedeklendi: {yedek_yol}")
+
+    # Random Forest modelini de kaydet
+    rf_yol = model_yolu.parent / "rf_model_v2.pkl"
+    joblib.dump(rf_model, rf_yol)
+    print(f"      [OK] Random Forest modeli kaydedildi: {rf_yol}\n")
 
 
 def main():
@@ -297,21 +391,32 @@ def main():
     scaler, svm_model, svm_pipeline, rf_model = sizintisiz_olcekleme_ve_egitim(X_train, y_train)
 
     # 3. Dogrulama (Val) ve Test Basarimi Olcumu
-    val_acc, test_acc = dogrulama_ve_test_degerlendir(
+    val_acc, val_f1, test_acc, test_f1, rf_acc, rf_f1 = dogrulama_ve_test_degerlendir(
         scaler, svm_model, rf_model, X_val, y_val, X_test, y_test
     )
 
     # 4. Feature Importance Grafigi
     oznitelik_onem_grafigi_ciz(rf_model, fig_yolu)
 
-    # 5. Test Tahmin Raporu Uretimi (reports/svm_test_tahminleri_v2.csv)
-    rapor_yolu = PROJE_KOKU / "reports" / "svm_test_tahminleri_v2.csv"
-    test_tahminlerini_kaydet(svm_pipeline, csv_yolu=csv_yolu, cikti_yolu=rapor_yolu, bolum="test")
+    # 5. Test Tahmin Raporlarinin Uretimi
+    # SVM Test Tahminleri (reports/svm_test_tahminleri_v2.csv)
+    svm_rapor_yolu = PROJE_KOKU / "reports" / "svm_test_tahminleri_v2.csv"
+    test_tahminlerini_kaydet(svm_pipeline, model_adi="SVM", csv_yolu=csv_yolu, cikti_yolu=svm_rapor_yolu, bolum="test")
 
-    # 6. Modeli svm_model_v2.pkl Olarak Kaydet
-    modeli_kaydet(svm_pipeline, model_v2_yolu)
+    # RF Test Tahminleri (reports/rf_test_tahminleri_v2.csv)
+    rf_rapor_yolu = PROJE_KOKU / "reports" / "rf_test_tahminleri_v2.csv"
+    test_tahminlerini_kaydet(rf_model, model_adi="Random Forest", csv_yolu=csv_yolu, cikti_yolu=rf_rapor_yolu, bolum="test")
 
-    print("[TAMAMLANDI] Model egitimi, basarim kontrolu, test tahmin raporu ve model kayit adimlari basariyla tamamlandi.")
+    # 6. Random Forest Test Sonuclarinin Rapor Dosyalarina Kaydedilmesi
+    rf_test_sonuclarini_kaydet(
+        rf_model, X_test, y_test, val_acc, val_f1, test_acc, test_f1, rf_acc, rf_f1,
+        cikti_dizini=PROJE_KOKU / "reports"
+    )
+
+    # 7. Modelleri Kaydet
+    modeli_kaydet(svm_pipeline, rf_model, model_v2_yolu)
+
+    print("[TAMAMLANDI] Model egitimi, basarim kontrolu, RF/SVM test tahmin raporlari ve model kayit adimlari basariyla tamamlandi.")
 
 
 if __name__ == "__main__":

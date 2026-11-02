@@ -1,0 +1,22 @@
+======================================================================
+       RETINA-AI: RANDOM FOREST VE SVM TEST PERFORMANS RAPORU (v2)
+======================================================================
+
+Kume / Model         | Accuracy (%) | Macro F1
+--------------------------------------------------
+Validation (SVM)     | %62.43      | 0.6067
+Test (SVM)           | %61.40      | 0.5945
+Random Forest (Test) | %65.50      | 0.6455
+======================================================================
+
+--- Random Forest Test Kumesi Siniflandirma Raporu ---
+                      precision    recall  f1-score   support
+
+            cataract     0.7500    0.8571    0.8000        42
+diabetic_retinopathy     0.7347    0.8372    0.7826        43
+            glaucoma     0.5250    0.4884    0.5060        43
+              normal     0.5588    0.4419    0.4935        43
+
+            accuracy                         0.6550       171
+           macro avg     0.6421    0.6561    0.6455       171
+        weighted avg     0.6415    0.6550    0.6446       171

@@ -1,0 +1,4 @@
+kume_model,accuracy,macro_f1
+Validation (Val) - SVM,62.43,0.6067
+Test - SVM,61.4,0.5945
+Random Forest (Test),65.5,0.6455

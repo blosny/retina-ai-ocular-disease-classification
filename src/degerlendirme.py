@@ -25,6 +25,13 @@ Calistirma (proje ana klasorunden):
 """
 
 from pathlib import Path
+import os
+import sys
+
+# Windows site-packages fallback (WindowsApps ortami icin)
+extra_site = r"C:\Users\samil\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\LocalCache\local-packages\Python312\site-packages"
+if os.path.exists(extra_site) and extra_site not in sys.path:
+    sys.path.insert(0, extra_site)
 
 import numpy as np
 import pandas as pd
@@ -51,6 +58,7 @@ SIRALI = ["#fcfcfb", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#18
 DOSYALAR = {
     "CNN v2": "cnn_test_tahminleri_v2.csv",
     "SVM v2": "svm_test_tahminleri_v2.csv",
+    "RF v2": "rf_test_tahminleri_v2.csv",
     "CNN v1 (geçersiz)": "cnn_test_tahminleri.csv",
 }
 
@@ -207,14 +215,21 @@ def main():
         print("\n=== Once-sonra (CNN) ===")
         print(os_tablo.round(1).to_string())
 
-    # Model karsilastirmasi: ayni v2 test setinde CNN ve SVM
+    # Model karsilastirmasi: ayni v2 test setinde modeller
+    karsilastirma_modeller = {}
+    if "CNN v2" in modeller:
+        karsilastirma_modeller["CNN"] = sinif_dogruluklari(modeller["CNN v2"])
     if "SVM v2" in modeller:
-        mk = pd.DataFrame({"CNN": sinif_dogruluklari(modeller["CNN v2"]),
-                           "SVM": sinif_dogruluklari(modeller["SVM v2"])})
+        karsilastirma_modeller["SVM"] = sinif_dogruluklari(modeller["SVM v2"])
+    if "RF v2" in modeller:
+        karsilastirma_modeller["RF"] = sinif_dogruluklari(modeller["RF v2"])
+
+    if len(karsilastirma_modeller) > 1:
+        mk = pd.DataFrame(karsilastirma_modeller)
         mk.round(1).to_csv(CIKTI / "model_karsilastirma.csv")
-        gruplu_cubuk(mk, ["CNN", "SVM"], "Aynı test setinde CNN ve SVM",
-                     CIKTI / "figures" / "model_karsilastirma.png", KATEGORIK[:2])
-        print("\n=== CNN vs SVM ===")
+        gruplu_cubuk(mk, list(karsilastirma_modeller.keys()), "Aynı test setinde modeller",
+                     CIKTI / "figures" / "model_karsilastirma.png", KATEGORIK[:len(karsilastirma_modeller)])
+        print("\n=== Model Karsilastirmasi ===")
         print(mk.round(1).to_string())
 
     print(f"\n[TAMAM] Tablolar ve grafikler: {CIKTI}")

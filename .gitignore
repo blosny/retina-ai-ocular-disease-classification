@@ -40,6 +40,7 @@ data/processed/
 *.onnx
 *.pkl
 !models/svm_model*.pkl
+!models/rf_model*.pkl
 data/splits/raw_metadata_cache.csv
 
 # Personal / Local Planning (GitHub'a gitmeyecek yerel dosyalar)
